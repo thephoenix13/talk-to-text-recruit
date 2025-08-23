@@ -209,11 +209,18 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           table: 'calls'
         },
         (payload) => {
+          // Safely narrow payload.new/old before accessing properties to satisfy TypeScript
+          const newRow = (payload.new as Partial<Call> | null) ?? null;
+          const oldRow = (payload.old as Partial<Call> | null) ?? null;
+          const callId = newRow?.id ?? oldRow?.id ?? 'unknown';
+          const candidateId = newRow?.candidate_id ?? oldRow?.candidate_id ?? 'unknown';
+          const status = newRow?.status ?? (payload.eventType === 'DELETE' ? 'deleted' : 'unknown');
+
           console.log('📡 Real-time call update received:', {
             eventType: payload.eventType,
-            callId: payload.new?.id || payload.old?.id,
-            status: payload.new?.status || 'deleted',
-            candidateId: payload.new?.candidate_id || payload.old?.candidate_id
+            callId,
+            status,
+            candidateId
           });
           
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
