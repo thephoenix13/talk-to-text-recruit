@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,6 +47,12 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
   const [callingCandidates, setCallingCandidates] = useState<Set<string>>(new Set());
   const [liveTranscripts, setLiveTranscripts] = useState<Record<string, string>>({});
   const { toast } = useToast();
+
+  // Keep a ref in sync with realtimeCaptures so the subscription callback always sees the latest map
+  const realtimeCapturesRef = useRef<Record<string, RealtimeAudioCapture>>({});
+  useEffect(() => {
+    realtimeCapturesRef.current = realtimeCaptures;
+  }, [realtimeCaptures]);
 
   useEffect(() => {
     fetchCandidates();
@@ -196,9 +201,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
     }
   };
 
+  // Stable real-time subscription (subscribe once) and use refs for latest state
   useEffect(() => {
     console.log('🔄 Setting up enhanced calls subscription...');
-    
+
     const channel = supabase
       .channel('calls-realtime-updates')
       .on(
@@ -222,19 +228,21 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             status,
             candidateId
           });
-          
+
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const call = payload.new as Call;
+            if (!call) {
+              console.log('⚠️ No callable new row payload; skipping.');
+              return;
+            }
+
             console.log('🔄 Processing call update for candidate:', call.candidate_id, 'Status:', call.status);
-            
+
             // Handle active statuses (ringing and in-progress)
             if (call.status === 'ringing' || call.status === 'in-progress') {
               console.log('📌 Setting active call for candidate:', call.candidate_id);
               setActiveCalls(prev => {
-                const updated = {
-                  ...prev,
-                  [call.candidate_id]: call
-                };
+                const updated = { ...prev, [call.candidate_id]: call };
                 console.log('✅ Active calls updated:', Object.keys(updated));
                 return updated;
               });
@@ -246,19 +254,21 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               }));
 
               // Start realtime transcription for in-progress calls only
-              if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
+              if (call.status === 'in-progress' && !realtimeCapturesRef.current[call.id]) {
                 console.log('🎙️ Starting realtime transcription for in-progress call:', call.id);
                 const capture = startRealtimeTranscription(call.id);
-                setRealtimeCaptures(prev => ({
-                  ...prev,
-                  [call.id]: capture
-                }));
+                // Update state and ref in sync
+                setRealtimeCaptures(prev => {
+                  const updated = { ...prev, [call.id]: capture };
+                  realtimeCapturesRef.current = updated;
+                  return updated;
+                });
               }
-            } 
+            }
             // Handle completed/failed statuses
             else if (['completed', 'failed', 'no-answer', 'busy'].includes(call.status)) {
               console.log('🏁 Call ended, removing from active calls. Status:', call.status);
-              
+
               setActiveCalls(prev => {
                 const updated = { ...prev };
                 delete updated[call.candidate_id];
@@ -273,32 +283,47 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 return updated;
               });
 
-              // Stop realtime transcription
-              if (realtimeCaptures[call.id]) {
+              // Stop realtime transcription via ref (no re-subscribe)
+              const capture = realtimeCapturesRef.current[call.id];
+              if (capture) {
                 console.log('🛑 Stopping realtime transcription for ended call:', call.id);
-                realtimeCaptures[call.id].stopCapture();
+                capture.stopCapture();
                 setRealtimeCaptures(prev => {
                   const updated = { ...prev };
                   delete updated[call.id];
+                  realtimeCapturesRef.current = updated;
                   return updated;
                 });
               }
             }
           } else if (payload.eventType === 'DELETE') {
             const deletedCall = payload.old as Call;
+            if (!deletedCall) return;
             console.log('🗑️ Call deleted from database:', deletedCall.id);
-            
+
             setActiveCalls(prev => {
               const updated = { ...prev };
               delete updated[deletedCall.candidate_id];
               return updated;
             });
-            
+
             setLiveTranscripts(prev => {
               const updated = { ...prev };
               delete updated[deletedCall.id];
               return updated;
             });
+
+            const capture = realtimeCapturesRef.current[deletedCall.id];
+            if (capture) {
+              console.log('🛑 Stopping realtime transcription for deleted call:', deletedCall.id);
+              capture.stopCapture();
+              setRealtimeCaptures(prev => {
+                const updated = { ...prev };
+                delete updated[deletedCall.id];
+                realtimeCapturesRef.current = updated;
+                return updated;
+              });
+            }
           }
         }
       )
@@ -308,10 +333,11 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
 
     return () => {
       console.log('🧹 Cleaning up enhanced calls subscription');
-      Object.values(realtimeCaptures).forEach(capture => capture.stopCapture());
+      // Stop any ongoing captures on unmount
+      Object.values(realtimeCapturesRef.current).forEach(capture => capture.stopCapture());
       supabase.removeChannel(channel);
     };
-  }, [realtimeCaptures]);
+  }, []); // Subscribe once
 
   return (
     <div className="space-y-4">
@@ -331,9 +357,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       
       {filteredCandidates.map((candidate) => {
         const activeCall = activeCalls[candidate.id];
-        const hasActiveCall = activeCall && (activeCall.status === 'in-progress' || activeCall.status === 'ringing');
+        // Ensure this is always a boolean
+        const hasActiveCall = !!activeCall && (activeCall.status === 'in-progress' || activeCall.status === 'ringing');
         const liveTranscript = activeCall ? liveTranscripts[activeCall.id] || '' : '';
-        
+
         console.log('🎯 Rendering candidate:', candidate.full_name, {
           activeCall: activeCall ? {
             id: activeCall.id,
@@ -343,7 +370,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           hasActiveCall,
           callStatus: activeCall?.status || 'none'
         });
-        
+
         return (
           <div key={candidate.id} className="space-y-4">
             <Card className="p-6">
