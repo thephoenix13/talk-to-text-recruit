@@ -16,7 +16,12 @@ const RealtimeTranscript: React.FC<RealtimeTranscriptProps> = ({ callId, isActiv
   const [isListening, setIsListening] = useState(false);
 
   useEffect(() => {
-    if (!isActive || !callId) return;
+    console.log('RealtimeTranscript mounted:', { callId, isActive });
+    
+    if (!isActive || !callId) {
+      console.log('RealtimeTranscript not active or no callId');
+      return;
+    }
 
     // Subscribe to real-time updates for the call
     const channel = supabase
@@ -30,21 +35,27 @@ const RealtimeTranscript: React.FC<RealtimeTranscriptProps> = ({ callId, isActiv
           filter: `id=eq.${callId}`
         },
         (payload) => {
-          console.log('Realtime transcript update:', payload);
+          console.log('Realtime transcript update received:', payload);
           if (payload.new.transcript) {
+            console.log('Setting transcript:', payload.new.transcript);
             setTranscript(payload.new.transcript);
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Realtime subscription status:', status);
+      });
 
     // Fetch initial transcript
     const fetchInitialTranscript = async () => {
-      const { data } = await supabase
+      console.log('Fetching initial transcript for call:', callId);
+      const { data, error } = await supabase
         .from('calls')
-        .select('transcript')
+        .select('transcript, status')
         .eq('id', callId)
         .single();
+      
+      console.log('Initial transcript fetch result:', { data, error });
       
       if (data?.transcript) {
         setTranscript(data.transcript);
@@ -55,21 +66,23 @@ const RealtimeTranscript: React.FC<RealtimeTranscriptProps> = ({ callId, isActiv
     setIsListening(true);
 
     return () => {
+      console.log('Cleaning up realtime subscription for call:', callId);
       supabase.removeChannel(channel);
       setIsListening(false);
     };
   }, [callId, isActive]);
 
+  // Always render the component when isActive is true, even without transcript
   if (!isActive) {
     return null;
   }
 
   return (
-    <Card className="w-full">
+    <Card className="w-full border-2 border-blue-200 bg-blue-50">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center justify-between text-lg">
           <div className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
+            <FileText className="h-5 w-5 text-blue-600" />
             Live Transcript
           </div>
           <Badge variant={isListening ? "default" : "secondary"} className="flex items-center gap-1">
@@ -79,17 +92,20 @@ const RealtimeTranscript: React.FC<RealtimeTranscriptProps> = ({ callId, isActiv
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-40 w-full rounded border p-4">
+        <ScrollArea className="h-40 w-full rounded border p-4 bg-white">
           {transcript ? (
             <div className="text-sm leading-relaxed">
               {transcript}
             </div>
           ) : (
             <div className="text-sm text-muted-foreground italic">
-              Waiting for conversation to begin...
+              {isListening ? 'Waiting for conversation to begin...' : 'Transcript will appear here during the call'}
             </div>
           )}
         </ScrollArea>
+        <div className="mt-2 text-xs text-gray-500">
+          Call ID: {callId} | Status: {isListening ? 'Active' : 'Inactive'}
+        </div>
       </CardContent>
     </Card>
   );

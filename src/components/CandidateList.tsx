@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
@@ -151,13 +150,20 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const call = payload.new as Call;
-            setActiveCalls(prev => ({
-              ...prev,
-              [call.candidate_id]: call
-            }));
+            console.log('Processing call update:', call);
+            
+            setActiveCalls(prev => {
+              const updated = {
+                ...prev,
+                [call.candidate_id]: call
+              };
+              console.log('Updated active calls:', updated);
+              return updated;
+            });
 
             // Start realtime transcription for in-progress calls
             if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
+              console.log('Starting realtime transcription for call:', call.id);
               const capture = startRealtimeTranscription(call.id);
               setRealtimeCaptures(prev => ({
                 ...prev,
@@ -167,6 +173,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
 
             // Stop realtime transcription for completed calls
             if (call.status === 'completed' && realtimeCaptures[call.id]) {
+              console.log('Stopping realtime transcription for call:', call.id);
               realtimeCaptures[call.id].stopCapture();
               setRealtimeCaptures(prev => {
                 const updated = { ...prev };
@@ -177,7 +184,9 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Calls subscription status:', status);
+      });
 
     return () => {
       // Clean up realtime captures
@@ -202,54 +211,71 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         </Button>
       </div>
       
-      {candidates.map((candidate) => (
-        <Card key={candidate.id} className="p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">{candidate.full_name}</h2>
-              <div className="text-sm text-gray-500">
-                <User className="mr-1 inline-block h-4 w-4" />
-                {candidate.email || 'No email'}
+      {filteredCandidates.map((candidate) => {
+        const activeCall = activeCalls[candidate.id];
+        const hasActiveCall = activeCall && (activeCall.status === 'in-progress' || activeCall.status === 'ringing');
+        
+        return (
+          <Card key={candidate.id} className="p-6">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">{candidate.full_name}</h2>
+                <div className="text-sm text-gray-500">
+                  <User className="mr-1 inline-block h-4 w-4" />
+                  {candidate.email || 'No email'}
+                </div>
+                <div className="text-sm text-gray-500">
+                  <MapPin className="mr-1 inline-block h-4 w-4" />
+                  {candidate.phone}
+                </div>
+                <div className="text-sm text-gray-500">
+                  <Calendar className="mr-1 inline-block h-4 w-4" />
+                  Created: {new Date(candidate.created_at).toLocaleDateString()}
+                </div>
+                {activeCall && (
+                  <div className="text-sm font-medium text-blue-600 mt-1">
+                    Call Status: {activeCall.status}
+                  </div>
+                )}
               </div>
-              <div className="text-sm text-gray-500">
-                <MapPin className="mr-1 inline-block h-4 w-4" />
-                {candidate.phone}
-              </div>
-              <div className="text-sm text-gray-500">
-                <Calendar className="mr-1 inline-block h-4 w-4" />
-                Created: {new Date(candidate.created_at).toLocaleDateString()}
+              <div className="flex flex-col items-end gap-2">
+                <Badge variant="secondary">
+                  <Clock className="mr-1 h-4 w-4" />
+                  {filteredCandidates.length} Candidates
+                </Badge>
+                {hasActiveCall && (
+                  <Badge variant="default" className="bg-green-100 text-green-800">
+                    Active Call
+                  </Badge>
+                )}
               </div>
             </div>
-            <Badge variant="secondary">
-              <Clock className="mr-1 h-4 w-4" />
-              {filteredCandidates.length} Candidates
-            </Badge>
-          </div>
-          
-          {/* Show realtime transcript for active calls */}
-          {activeCalls[candidate.id] && (
-            <div className="mt-4">
-              <RealtimeTranscript 
-                callId={activeCalls[candidate.id].id}
-                isActive={activeCalls[candidate.id].status === 'in-progress'}
-              />
+            
+            {/* Show realtime transcript for any active call (including ringing) */}
+            {activeCall && (
+              <div className="mt-4">
+                <RealtimeTranscript 
+                  callId={activeCall.id}
+                  isActive={true}
+                />
+              </div>
+            )}
+            
+            <div className="mt-4 flex space-x-2">
+              <Button 
+                onClick={() => makeCall(candidate.id)}
+                disabled={callingCandidates.has(candidate.id) || hasActiveCall}
+              >
+                {callingCandidates.has(candidate.id) ? 'Calling...' : hasActiveCall ? 'In Call' : 'Call'}
+              </Button>
+              <Button variant="outline" onClick={() => handleOpenCallHistory(candidate.id)}>
+                <History className="mr-2 h-4 w-4" />
+                Call History
+              </Button>
             </div>
-          )}
-          
-          <div className="mt-4 flex space-x-2">
-            <Button 
-              onClick={() => makeCall(candidate.id)}
-              disabled={callingCandidates.has(candidate.id)}
-            >
-              {callingCandidates.has(candidate.id) ? 'Calling...' : 'Call'}
-            </Button>
-            <Button variant="outline" onClick={() => handleOpenCallHistory(candidate.id)}>
-              <History className="mr-2 h-4 w-4" />
-              Call History
-            </Button>
-          </div>
-        </Card>
-      ))}
+          </Card>
+        );
+      })}
       
       <AddCandidateDialog 
         open={addCandidateOpen} 
