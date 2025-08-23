@@ -213,7 +213,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           table: 'calls'
         },
         (payload) => {
-          console.log('📡 Raw real-time payload received:', payload);
+          console.log('📡 Raw real-time payload received:', JSON.stringify(payload, null, 2));
 
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const call = payload.new as Call;
@@ -222,15 +222,23 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               return;
             }
 
-            console.log(`🔔 Processing ${payload.eventType} for call ${call.id} - Status: ${call.status} - Candidate: ${call.candidate_id}`);
+            console.log(`🔔 Processing ${payload.eventType} for call ${call.id}`);
+            console.log(`   Status: ${call.status}`);
+            console.log(`   Candidate: ${call.candidate_id}`);
+            console.log(`   Timestamp: ${new Date().toLocaleTimeString()}`);
 
             // Handle active call statuses
             if (['initiated', 'ringing', 'in-progress'].includes(call.status)) {
-              console.log(`📌 Adding/updating active call for candidate ${call.candidate_id}`);
+              console.log(`📌 Adding/updating active call for candidate ${call.candidate_id} with status: ${call.status}`);
               
               setActiveCalls(prevActiveCalls => {
-                const updated = { ...prevActiveCalls, [call.candidate_id]: call };
-                console.log(`✅ Active calls state updated. Current active calls:`, Object.keys(updated));
+                const updated = { ...prevActiveCalls };
+                updated[call.candidate_id] = call;
+                console.log(`✅ Active calls updated:`, Object.keys(updated).map(candidateId => ({
+                  candidateId,
+                  status: updated[candidateId].status,
+                  callId: updated[candidateId].id
+                })));
                 return updated;
               });
 
@@ -258,7 +266,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               setActiveCalls(prevActiveCalls => {
                 const updated = { ...prevActiveCalls };
                 delete updated[call.candidate_id];
-                console.log(`🗑️ Removed call from active calls. Remaining active calls:`, Object.keys(updated));
+                console.log(`🗑️ Removed call from active calls. Remaining:`, Object.keys(updated).map(candidateId => ({
+                  candidateId,
+                  status: updated[candidateId].status
+                })));
                 return updated;
               });
 
@@ -317,6 +328,11 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       )
       .subscribe((status) => {
         console.log('🔗 Enhanced calls subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to calls real-time updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Error subscribing to calls real-time updates');
+        }
       });
 
     return () => {
