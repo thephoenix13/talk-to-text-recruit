@@ -42,6 +42,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [activeCalls, setActiveCalls] = useState<Record<string, Call>>({});
   const [realtimeCaptures, setRealtimeCaptures] = useState<Record<string, RealtimeAudioCapture>>({});
+  const [callingCandidates, setCallingCandidates] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
   useEffect(() => {
@@ -84,70 +85,52 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
   };
 
   const makeCall = async (candidateId: string) => {
+    if (callingCandidates.has(candidateId)) {
+      return; // Prevent multiple calls to the same candidate
+    }
+
+    const candidate = candidates.find(c => c.id === candidateId);
+    if (!candidate) {
+      toast({
+        title: "Error",
+        description: "Candidate not found",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setCallingCandidates(prev => new Set(prev).add(candidateId));
+
     try {
-      // 1. Create a new call record in Supabase
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: call, error: callError } = await supabase
-        .from('calls')
-        .insert({
-          candidate_id: candidateId,
-          recruiter_id: user?.id || 'unknown',
-          status: 'pending',
-          started_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+      // Use the existing initiate-call edge function
+      const { data, error } = await supabase.functions.invoke('initiate-call', {
+        body: {
+          candidateId: candidateId,
+          candidateName: candidate.full_name,
+          candidatePhone: candidate.phone,
+        }
+      });
 
-      if (callError) {
-        throw callError;
-      }
-
-      // 2. Start the call using Twilio (or your preferred provider)
-      // const twilioResponse = await fetch('/api/twilio/start-call', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     candidatePhone: candidates.find(c => c.id === candidateId)?.phone,
-      //     callId: call.id,
-      //   }),
-      // });
-
-      // if (!twilioResponse.ok) {
-      //   throw new Error('Failed to initiate call');
-      // }
-
-      // const twilioData = await twilioResponse.json();
-
-      // 3. Update the call record with Twilio SID and status
-      const { data: updatedCall, error: updateError } = await supabase
-        .from('calls')
-        .update({
-          status: 'in-progress',
-          twilio_call_sid: 'simulated_twilio_sid', // twilioData.sid,
-        })
-        .eq('id', call.id)
-        .select()
-        .single();
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      setActiveCalls(prev => ({
-        ...prev,
-        [candidateId]: updatedCall
-      }));
+      if (error) throw error;
 
       toast({
-        title: "Call Started",
-        description: `Call started with ${candidates.find(c => c.id === candidateId)?.full_name}`,
+        title: "Call Initiated",
+        description: data.message || `Calling ${candidate.full_name}...`,
       });
+
+      // The call status will be updated via real-time subscriptions
     } catch (error: any) {
       console.error("Call initiation error:", error);
       toast({
         title: "Error",
-        description: "Failed to initiate call",
+        description: error.message || "Failed to initiate call",
         variant: "destructive",
+      });
+    } finally {
+      setCallingCandidates(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(candidateId);
+        return newSet;
       });
     }
   };
@@ -254,8 +237,11 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           )}
           
           <div className="mt-4 flex space-x-2">
-            <Button onClick={() => makeCall(candidate.id)}>
-              Call
+            <Button 
+              onClick={() => makeCall(candidate.id)}
+              disabled={callingCandidates.has(candidate.id)}
+            >
+              {callingCandidates.has(candidate.id) ? 'Calling...' : 'Call'}
             </Button>
             <Button variant="outline" onClick={() => handleOpenCallHistory(candidate.id)}>
               <History className="mr-2 h-4 w-4" />
