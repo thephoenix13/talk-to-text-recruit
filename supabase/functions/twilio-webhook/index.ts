@@ -28,8 +28,14 @@ serve(async (req) => {
       data[key] = value.toString()
     }
 
-    console.log('Twilio webhook data:', data)
-    console.log('Call ID:', callId, 'Type:', type)
+    console.log('🔔 Twilio webhook received:', {
+      callId,
+      type,
+      callStatus: data.CallStatus,
+      callSid: data.CallSid,
+      from: data.From,
+      to: data.To
+    })
 
     // Initialize Supabase client with service role
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -42,7 +48,7 @@ serve(async (req) => {
       const recordingSid = data.RecordingSid
       
       if (recordingUrl) {
-        console.log('Recording available:', recordingUrl)
+        console.log('🎥 Recording available:', recordingUrl)
         // Update call with recording URL
         await supabase
           .from('calls')
@@ -62,65 +68,100 @@ serve(async (req) => {
       const callStatus = data.CallStatus
       const callDuration = data.CallDuration ? parseInt(data.CallDuration) : null
 
-      console.log('Call status update:', callStatus, 'for call:', callId)
+      console.log('📞 Processing call status update:', {
+        callId,
+        twilioStatus: callStatus,
+        duration: callDuration,
+        timestamp: new Date().toISOString()
+      })
 
       const updateData: any = {}
       
-      // Map Twilio statuses to our statuses more accurately
-      if (callStatus === 'ringing') {
+      // Enhanced status mapping with more detailed logging
+      if (callStatus === 'initiated') {
+        updateData.status = 'initiated'
+        console.log('📱 Call initiated')
+      } else if (callStatus === 'ringing') {
         updateData.status = 'ringing'
-      } else if (callStatus === 'in-progress' || callStatus === 'answered') {
+        console.log('📞 Call is ringing')
+      } else if (callStatus === 'answered' || callStatus === 'in-progress') {
         updateData.status = 'in-progress'
-        console.log('Call is now in-progress, starting real-time transcription')
+        console.log('✅ Call answered - setting status to in-progress')
       } else if (callStatus === 'completed') {
         updateData.status = 'completed'
         if (callDuration) {
           updateData.duration_seconds = callDuration
           updateData.ended_at = new Date().toISOString()
         }
+        console.log('🏁 Call completed')
       } else if (callStatus === 'busy') {
         updateData.status = 'busy'
+        console.log('📵 Call was busy')
       } else if (callStatus === 'no-answer') {
         updateData.status = 'no-answer'
+        console.log('📵 No answer')
       } else if (callStatus === 'failed') {
         updateData.status = 'failed'
+        console.log('❌ Call failed')
+      } else if (callStatus === 'canceled') {
+        updateData.status = 'failed'
+        console.log('🚫 Call canceled')
       }
 
       if (Object.keys(updateData).length > 0) {
-        console.log('Updating call with:', updateData)
+        console.log('💾 Updating call in database:', {
+          callId,
+          updateData,
+          timestamp: new Date().toISOString()
+        })
+        
         const { error } = await supabase
           .from('calls')
           .update(updateData)
           .eq('id', callId)
 
         if (error) {
-          console.error('Error updating call:', error)
+          console.error('❌ Database update error:', error)
         } else {
-          console.log('Call updated successfully')
+          console.log('✅ Call status updated successfully:', updateData.status)
+          
+          // Verify the update worked
+          const { data: updatedCall, error: fetchError } = await supabase
+            .from('calls')
+            .select('status')
+            .eq('id', callId)
+            .single()
+          
+          if (!fetchError && updatedCall) {
+            console.log('🔍 Verified call status in database:', updatedCall.status)
+          }
         }
 
         // If call is now in-progress, start real-time transcription
         if (updateData.status === 'in-progress') {
-          console.log('Starting real-time transcription for in-progress call')
+          console.log('🎙️ Call is in-progress, starting real-time transcription')
           try {
-            await supabase.functions.invoke('transcribe-call', {
+            const transcribeResult = await supabase.functions.invoke('transcribe-call', {
               body: { 
                 callId, 
                 isRealtime: true,
                 audioData: 'start_realtime'
               }
             })
+            console.log('📡 Real-time transcription started:', transcribeResult)
           } catch (transcribeError) {
-            console.error('Error starting real-time transcription:', transcribeError)
+            console.error('❌ Error starting real-time transcription:', transcribeError)
           }
         }
+      } else {
+        console.log('⚠️ No status update needed for Twilio status:', callStatus)
       }
     }
 
     return new Response('OK', { headers: corsHeaders })
 
   } catch (error) {
-    console.error('Webhook error:', error)
+    console.error('💥 Webhook error:', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       { 

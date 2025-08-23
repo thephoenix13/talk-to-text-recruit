@@ -64,7 +64,7 @@ serve(async (req) => {
 
     if (callError) throw callError
 
-    console.log('Call record created:', callData.id)
+    console.log('📋 Call record created:', callData.id)
 
     // Get Twilio credentials
     const twilioAccountSid = Deno.env.get('TWILIO_ACCOUNT_SID')
@@ -84,12 +84,12 @@ serve(async (req) => {
     candidateFormData.append('To', candidatePhone)
     candidateFormData.append('From', twilioPhoneNumber)
     candidateFormData.append('Url', candidateTwimlUrl)
-    // Updated webhook URL to include proper status callback events
+    // Enhanced status callback events to capture all status changes
     candidateFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
-    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,busy,no-answer,failed')
+    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
     candidateFormData.append('StatusCallbackMethod', 'POST')
 
-    console.log('Calling candidate:', candidatePhone)
+    console.log('📞 Calling candidate:', candidatePhone, 'with callback events:', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
 
     const candidateResponse = await fetch(twilioUrl, {
       method: 'POST',
@@ -106,7 +106,7 @@ serve(async (req) => {
     }
 
     const candidateData = await candidateResponse.json()
-    console.log('Candidate call initiated:', candidateData.sid)
+    console.log('✅ Candidate call initiated:', candidateData.sid)
 
     // 2. Wait a moment, then call the recruiter
     setTimeout(async () => {
@@ -118,9 +118,10 @@ serve(async (req) => {
         recruiterFormData.append('From', twilioPhoneNumber)
         recruiterFormData.append('Url', recruiterTwimlUrl)
         recruiterFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recruiter`)
-        recruiterFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,busy,no-answer,failed')
+        recruiterFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
+        recruiterFormData.append('StatusCallbackMethod', 'POST')
 
-        console.log('Calling recruiter:', profile.phone)
+        console.log('📞 Calling recruiter:', profile.phone)
 
         const recruiterResponse = await fetch(twilioUrl, {
           method: 'POST',
@@ -132,13 +133,13 @@ serve(async (req) => {
         })
 
         if (!recruiterResponse.ok) {
-          console.error('Failed to call recruiter:', await recruiterResponse.text())
+          console.error('❌ Failed to call recruiter:', await recruiterResponse.text())
         } else {
           const recruiterData = await recruiterResponse.json()
-          console.log('Recruiter call initiated:', recruiterData.sid)
+          console.log('✅ Recruiter call initiated:', recruiterData.sid)
         }
       } catch (error) {
-        console.error('Error calling recruiter:', error)
+        console.error('❌ Error calling recruiter:', error)
       }
     }, 3000) // Wait 3 seconds before calling recruiter
 
@@ -151,7 +152,7 @@ serve(async (req) => {
       })
       .eq('id', callData.id)
 
-    console.log('Call updated to ringing status')
+    console.log('📞 Call updated to ringing status')
 
     return new Response(
       JSON.stringify({ 
@@ -165,7 +166,7 @@ serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Error initiating call:', error)
+    console.error('❌ Error initiating call:', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       { 
