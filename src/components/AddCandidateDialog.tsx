@@ -11,9 +11,10 @@ import { useToast } from '@/components/ui/use-toast';
 interface AddCandidateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCandidateAdded?: () => void | Promise<void>;
 }
 
-const AddCandidateDialog: React.FC<AddCandidateDialogProps> = ({ open, onOpenChange }) => {
+const AddCandidateDialog: React.FC<AddCandidateDialogProps> = ({ open, onOpenChange, onCandidateAdded }) => {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -53,8 +54,10 @@ const AddCandidateDialog: React.FC<AddCandidateDialogProps> = ({ open, onOpenCha
       setNotes('');
       onOpenChange(false);
       
-      // Refresh the page to show new candidate
-      window.location.reload();
+      // Call the callback to refresh candidates
+      if (onCandidateAdded) {
+        await onCandidateAdded();
+      }
     } catch (error: any) {
       toast({
         title: "Error",

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
@@ -27,7 +28,12 @@ interface Call {
   started_at: string;
 }
 
-const CandidateList = () => {
+interface CandidateListProps {
+  onViewCallHistory?: (candidateId: string) => void;
+  userPhone?: string | null;
+}
+
+const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPhone }) => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -72,16 +78,20 @@ const CandidateList = () => {
   const handleOpenCallHistory = (candidateId: string) => {
     setSelectedCandidateId(candidateId);
     setCallHistoryOpen(true);
+    if (onViewCallHistory) {
+      onViewCallHistory(candidateId);
+    }
   };
 
   const makeCall = async (candidateId: string) => {
     try {
       // 1. Create a new call record in Supabase
+      const { data: { user } } = await supabase.auth.getUser();
       const { data: call, error: callError } = await supabase
         .from('calls')
         .insert({
           candidate_id: candidateId,
-          recruiter_id: supabase.auth.user()?.id || 'unknown',
+          recruiter_id: user?.id || 'unknown',
           status: 'pending',
           started_at: new Date().toISOString(),
         })
@@ -255,7 +265,11 @@ const CandidateList = () => {
         </Card>
       ))}
       
-      <AddCandidateDialog open={addCandidateOpen} onOpenChange={setAddCandidateOpen} onCandidateAdded={fetchCandidates} />
+      <AddCandidateDialog 
+        open={addCandidateOpen} 
+        onOpenChange={setAddCandidateOpen} 
+        onCandidateAdded={fetchCandidates}
+      />
       <CallHistoryDialog
         open={callHistoryOpen}
         onOpenChange={setCallHistoryOpen}
