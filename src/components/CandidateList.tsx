@@ -270,9 +270,9 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
     }
   };
 
-  // Enhanced real-time subscription with proper state updates
+  // Enhanced real-time subscription with transcript debugging
   useEffect(() => {
-    console.log('🔄 Setting up enhanced calls subscription...');
+    console.log('🔄 Setting up enhanced calls subscription with transcript debugging...');
 
     const channel = supabase
       .channel('calls-realtime-updates')
@@ -296,6 +296,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             console.log(`🔔 Processing ${payload.eventType} for call ${call.id}`);
             console.log(`   Status: ${call.status}`);
             console.log(`   Candidate: ${call.candidate_id}`);
+            console.log(`   Transcript Length: ${call.transcript?.length || 0} chars`);
+            console.log(`   Transcript Preview: ${call.transcript?.substring(0, 100) || 'N/A'}...`);
             console.log(`   Timestamp: ${new Date().toLocaleTimeString()}`);
 
             if (['initiated', 'ringing', 'in-progress'].includes(call.status)) {
@@ -307,15 +309,25 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 console.log(`✅ Active calls updated:`, Object.keys(updated).map(candidateId => ({
                   candidateId,
                   status: updated[candidateId].status,
-                  callId: updated[candidateId].id
+                  callId: updated[candidateId].id,
+                  transcriptLength: updated[candidateId].transcript?.length || 0
                 })));
                 return updated;
               });
 
-              setLiveTranscripts(prev => ({
-                ...prev,
-                [call.id]: call.transcript || ''
-              }));
+              // Update live transcripts with debugging
+              setLiveTranscripts(prev => {
+                const newTranscript = call.transcript || '';
+                console.log(`📝 Updating live transcript for call ${call.id}:`);
+                console.log(`   Previous length: ${prev[call.id]?.length || 0} chars`);
+                console.log(`   New length: ${newTranscript.length} chars`);
+                console.log(`   New content: "${newTranscript.substring(0, 200)}..."`);
+                
+                return {
+                  ...prev,
+                  [call.id]: newTranscript
+                };
+              });
 
               if (call.status === 'in-progress' && !realtimeCapturesRef.current[call.id]) {
                 console.log('🎙️ Starting realtime transcription for in-progress call:', call.id);
@@ -342,6 +354,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               setLiveTranscripts(prev => {
                 const updated = { ...prev };
                 delete updated[call.id];
+                console.log(`🗑️ Removed transcript for call ${call.id}`);
                 return updated;
               });
 
@@ -431,10 +444,13 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         console.log('🎯 Rendering candidate:', candidate.full_name, {
           activeCall: activeCall ? {
             id: activeCall.id,
-            status: activeCall.status
+            status: activeCall.status,
+            transcriptLength: activeCall.transcript?.length || 0
           } : null,
           hasActiveCall,
-          callStatus: activeCall?.status || 'none'
+          callStatus: activeCall?.status || 'none',
+          liveTranscriptLength: liveTranscript.length,
+          liveTranscriptPreview: liveTranscript.substring(0, 50) + '...'
         });
 
         return (
@@ -499,7 +515,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 </Button>
               </div>
 
-              {/* Enhanced Live Transcript Display */}
+              {/* Enhanced Live Transcript Display with Debugging */}
               <div className="mt-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <Badge variant={hasActiveCall && activeCall.status === 'in-progress' ? 'default' : 'secondary'} className="flex items-center gap-1">
@@ -512,11 +528,16 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                         : 'Inactive'
                     }
                   </Badge>
+                  {hasActiveCall && (
+                    <Badge variant="outline" className="text-xs">
+                      {liveTranscript.length} chars
+                    </Badge>
+                  )}
                 </div>
                 <Textarea
                   value={
                     hasActiveCall && activeCall.status === 'in-progress' 
-                      ? (liveTranscript || 'Transcript will appear here during the call...')
+                      ? (liveTranscript || 'Waiting for speech... Real-time transcription is active.')
                       : hasActiveCall && activeCall.status === 'ringing'
                       ? 'Call is ringing... Transcript will start when call connects.'
                       : hasActiveCall && activeCall.status === 'initiated'
@@ -541,7 +562,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   <div className="text-xs text-gray-500 flex justify-between">
                     <span>Call ID: {activeCall.id}</span>
                     <span>Status: {activeCall.status}</span>
-                    <span>Transcript Length: {liveTranscript.length} chars</span>
+                    <span>Live Transcript: {liveTranscript.length} chars</span>
+                    <span>DB Transcript: {activeCall.transcript?.length || 0} chars</span>
                   </div>
                 )}
               </div>

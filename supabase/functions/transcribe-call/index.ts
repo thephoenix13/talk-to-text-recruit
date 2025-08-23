@@ -54,21 +54,40 @@ serve(async (req) => {
       }
 
       // For realtime transcription during active calls
-      // In a production environment, this would integrate with Twilio's real-time audio stream
-      // For now, we'll simulate progressive transcription updates
-      
+      // Generate progressive simulated transcript for testing
       let currentTranscript = callData.transcript || ''
       
-      // Simulate progressive transcription (in real implementation, this would be actual audio processing)
-      if (!currentTranscript.includes('Realtime transcription active')) {
-        const realtimeUpdate = currentTranscript 
-          ? `${currentTranscript} [Realtime transcription active - Call in progress]`
-          : '[Realtime transcription active - Call in progress]'
+      // Simulate progressive transcription with realistic content
+      const realtimeSegments = [
+        '[Call connected - Real-time transcription starting...]',
+        '[Call connected - Real-time transcription starting...] Hello, this is a test call.',
+        '[Call connected - Real-time transcription starting...] Hello, this is a test call. We are now speaking...',
+        '[Call connected - Real-time transcription starting...] Hello, this is a test call. We are now speaking and the system should be capturing our conversation in real-time.',
+        '[Call connected - Real-time transcription starting...] Hello, this is a test call. We are now speaking and the system should be capturing our conversation in real-time. This is a simulated transcript for testing purposes.',
+        '[Call connected - Real-time transcription starting...] Hello, this is a test call. We are now speaking and the system should be capturing our conversation in real-time. This is a simulated transcript for testing purposes. The conversation continues...',
+      ]
+      
+      // Determine which segment to show based on call duration
+      const callStartTime = new Date(callData.started_at).getTime()
+      const currentTime = Date.now()
+      const callDurationSeconds = Math.floor((currentTime - callStartTime) / 1000)
+      
+      console.log(`⏰ Call duration: ${callDurationSeconds} seconds`)
+      
+      // Progress through segments based on call duration
+      const segmentIndex = Math.min(Math.floor(callDurationSeconds / 10), realtimeSegments.length - 1)
+      const newTranscript = realtimeSegments[segmentIndex]
+      
+      // Only update if transcript has changed
+      if (newTranscript !== currentTranscript) {
+        console.log(`📝 Updating transcript (segment ${segmentIndex}):`)
+        console.log(`   Previous: "${currentTranscript.substring(0, 100)}..."`)
+        console.log(`   New: "${newTranscript.substring(0, 100)}..."`)
         
-        // Update the call with realtime status
+        // Update the call with progressive transcript
         await supabase
           .from('calls')
-          .update({ transcript: realtimeUpdate })
+          .update({ transcript: newTranscript })
           .eq('id', callId)
 
         console.log(`✅ Realtime transcript updated for call ${callId}`)
@@ -76,19 +95,24 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ 
             success: true, 
-            transcript: realtimeUpdate,
-            isRealtime: true
+            transcript: newTranscript,
+            isRealtime: true,
+            segmentIndex,
+            callDurationSeconds
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
 
       // Return current transcript if no update needed
+      console.log(`ℹ️ No transcript update needed for call ${callId} (segment ${segmentIndex})`)
       return new Response(
         JSON.stringify({ 
           success: true, 
           transcript: currentTranscript,
-          isRealtime: true
+          isRealtime: true,
+          segmentIndex,
+          callDurationSeconds
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
