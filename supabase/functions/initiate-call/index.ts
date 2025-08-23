@@ -37,6 +37,9 @@ serve(async (req) => {
       throw new Error('Invalid authentication')
     }
 
+    // Create a unique conference name for this call
+    const conferenceName = `call-${candidateId}-${Date.now()}`
+
     // Create a call record
     const { data: callData, error: callError } = await supabase
       .from('calls')
@@ -59,18 +62,18 @@ serve(async (req) => {
       throw new Error('Twilio credentials not configured')
     }
 
-    // Create Twilio call
+    // Create Twilio call to candidate
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Calls.json`
-    const webhookUrl = `${supabaseUrl}/functions/v1/twilio-webhook`
+    const twimlUrl = `${supabaseUrl}/functions/v1/call-twiml?callId=${callData.id}&conference=${conferenceName}&participant=candidate`
 
     const formData = new URLSearchParams()
     formData.append('To', candidatePhone)
     formData.append('From', twilioPhoneNumber)
-    formData.append('Url', 'http://demo.twilio.com/docs/voice.xml') // Simple "Please wait" message
-    formData.append('StatusCallback', `${webhookUrl}?callId=${callData.id}`)
+    formData.append('Url', twimlUrl)
+    formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
     formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed')
     formData.append('Record', 'true')
-    formData.append('RecordingStatusCallback', `${webhookUrl}?callId=${callData.id}&type=recording`)
+    formData.append('RecordingStatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recording`)
 
     const twilioResponse = await fetch(twilioUrl, {
       method: 'POST',
@@ -88,7 +91,7 @@ serve(async (req) => {
 
     const twilioData = await twilioResponse.json()
 
-    // Update call record with Twilio SID
+    // Update call record with Twilio SID and conference name
     await supabase
       .from('calls')
       .update({
@@ -101,7 +104,9 @@ serve(async (req) => {
       JSON.stringify({ 
         success: true, 
         callId: callData.id,
-        twilioSid: twilioData.sid 
+        twilioSid: twilioData.sid,
+        conferenceName,
+        message: 'Call initiated to candidate. You will receive a call shortly to connect you.'
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

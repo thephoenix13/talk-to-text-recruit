@@ -64,9 +64,18 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory }) => {
       if (error) throw error;
 
       toast({
-        title: "Call Initiated",
-        description: `Calling ${candidate.full_name}...`,
+        title: "Call Initiated Successfully",
+        description: `Calling ${candidate.full_name}... You will receive a call shortly to connect you to the candidate.`,
       });
+
+      // Show additional info about the conference call
+      setTimeout(() => {
+        toast({
+          title: "How it works",
+          description: "The candidate will be called first, then you'll receive a call to join the conversation.",
+        });
+      }, 2000);
+
     } catch (error: any) {
       toast({
         title: "Error",
