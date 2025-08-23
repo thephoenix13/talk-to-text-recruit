@@ -84,12 +84,14 @@ serve(async (req) => {
     candidateFormData.append('To', candidatePhone)
     candidateFormData.append('From', twilioPhoneNumber)
     candidateFormData.append('Url', candidateTwimlUrl)
-    // Enhanced status callback events to capture all status changes
     candidateFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
-    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
+    // IMPORTANT: Twilio expects multiple StatusCallbackEvent params (one per event)
+    ;['initiated', 'ringing', 'answered', 'completed'].forEach(evt => {
+      candidateFormData.append('StatusCallbackEvent', evt)
+    })
     candidateFormData.append('StatusCallbackMethod', 'POST')
 
-    console.log('📞 Calling candidate:', candidatePhone, 'with callback events:', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
+    console.log('📞 Calling candidate:', candidatePhone, 'with StatusCallback events:', ['initiated','ringing','answered','completed'])
 
     const candidateResponse = await fetch(twilioUrl, {
       method: 'POST',
@@ -118,10 +120,12 @@ serve(async (req) => {
         recruiterFormData.append('From', twilioPhoneNumber)
         recruiterFormData.append('Url', recruiterTwimlUrl)
         recruiterFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recruiter`)
-        recruiterFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,in-progress,completed,busy,no-answer,failed,canceled')
+        ;['initiated', 'ringing', 'answered', 'completed'].forEach(evt => {
+          recruiterFormData.append('StatusCallbackEvent', evt)
+        })
         recruiterFormData.append('StatusCallbackMethod', 'POST')
 
-        console.log('📞 Calling recruiter:', profile.phone)
+        console.log('📞 Calling recruiter:', profile.phone, 'with StatusCallback events:', ['initiated','ringing','answered','completed'])
 
         const recruiterResponse = await fetch(twilioUrl, {
           method: 'POST',
@@ -168,7 +172,7 @@ serve(async (req) => {
   } catch (error) {
     console.error('❌ Error initiating call:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: (error as Error).message }),
       { 
         status: 400, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 

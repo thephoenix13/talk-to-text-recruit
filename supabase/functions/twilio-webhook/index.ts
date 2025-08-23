@@ -32,6 +32,7 @@ serve(async (req) => {
       callId,
       type,
       callStatus: data.CallStatus,
+      event: data.CallStatusCallbackEvent || data.CallStatus || 'unknown',
       callSid: data.CallSid,
       from: data.From,
       to: data.To
@@ -65,7 +66,7 @@ serve(async (req) => {
       }
     } else {
       // Handle call status updates
-      const callStatus = data.CallStatus
+      const callStatus = (data.CallStatus || '').toLowerCase()
       const callDuration = data.CallDuration ? parseInt(data.CallDuration) : null
 
       console.log('📞 Processing call status update:', {
@@ -77,10 +78,10 @@ serve(async (req) => {
 
       const updateData: any = {}
       
-      // Enhanced status mapping with more detailed logging
-      if (callStatus === 'initiated') {
+      // Enhanced status mapping
+      if (callStatus === 'queued' || callStatus === 'initiated') {
         updateData.status = 'initiated'
-        console.log('📱 Call initiated')
+        console.log('📱 Call initiated (queued/initiated)')
       } else if (callStatus === 'ringing') {
         updateData.status = 'ringing'
         console.log('📞 Call is ringing')
@@ -163,7 +164,7 @@ serve(async (req) => {
   } catch (error) {
     console.error('💥 Webhook error:', error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: (error as Error).message }),
       { 
         status: 400, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
