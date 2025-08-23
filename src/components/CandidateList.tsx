@@ -79,7 +79,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         const { data, error } = await supabase
           .from('calls')
           .select('*')
-          .in('status', ['ringing', 'in-progress']);
+          .eq('status', 'in-progress'); // Only fetch truly in-progress calls
 
         if (error) {
           console.error('❌ Error fetching active calls:', error);
@@ -87,14 +87,19 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         }
 
         if (data && data.length > 0) {
-          console.log('📋 Found existing active calls:', data);
+          console.log('📋 Found existing in-progress calls:', data);
           const callsMap = data.reduce((acc, call) => {
-            acc[call.candidate_id] = call;
+            // Only add if it's the most recent call for this candidate
+            if (!acc[call.candidate_id] || new Date(call.started_at) > new Date(acc[call.candidate_id].started_at)) {
+              acc[call.candidate_id] = call;
+            }
             return acc;
           }, {} as Record<string, Call>);
           setActiveCalls(callsMap);
+          console.log('✅ Active calls state updated:', Object.keys(callsMap));
         } else {
-          console.log('ℹ️ No existing active calls found');
+          console.log('ℹ️ No existing in-progress calls found');
+          setActiveCalls({}); // Clear any stale state
         }
       } catch (err) {
         console.error('❌ Exception fetching active calls:', err);
@@ -215,19 +220,19 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               transcript: call.transcript ? `${call.transcript.substring(0, 50)}...` : 'none'
             });
             
-            // Update active calls state
-            if (call.status === 'ringing' || call.status === 'in-progress') {
+            // Only update active calls for truly active statuses
+            if (call.status === 'in-progress') {
               setActiveCalls(prev => {
                 const updated = {
                   ...prev,
                   [call.candidate_id]: call
                 };
-                console.log('🔄 Updated active calls:', Object.keys(updated));
+                console.log('🔄 Updated active calls (in-progress):', Object.keys(updated));
                 return updated;
               });
 
               // Start realtime transcription for in-progress calls
-              if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
+              if (!realtimeCaptures[call.id]) {
                 console.log('🎙️ Starting realtime transcription for call:', call.id);
                 const capture = startRealtimeTranscription(call.id);
                 setRealtimeCaptures(prev => ({
@@ -235,6 +240,16 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   [call.id]: capture
                 }));
               }
+            } else if (call.status === 'ringing') {
+              // For ringing calls, we can show them but not start transcription yet
+              setActiveCalls(prev => {
+                const updated = {
+                  ...prev,
+                  [call.candidate_id]: call
+                };
+                console.log('🔄 Updated active calls (ringing):', Object.keys(updated));
+                return updated;
+              });
             } else if (call.status === 'completed' || call.status === 'failed') {
               // Remove from active calls
               setActiveCalls(prev => {
@@ -362,8 +377,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               </div>
             </Card>
 
-            {/* Show realtime transcript for any active call - this should always be visible when there's an active call */}
-            {activeCall && (
+            {/* Show realtime transcript only for in-progress calls */}
+            {activeCall && activeCall.status === 'in-progress' && (
               <div className="mt-4">
                 <div className="mb-2 text-sm font-medium text-gray-700 bg-yellow-100 p-2 rounded">
                   🎙️ Live Transcript for Call {activeCall.id} (Status: {activeCall.status})
