@@ -1,1 +1,11 @@
+
 project_id = "xhrmjkkpaudyrhdnljdg"
+
+[functions.call-twiml]
+verify_jwt = false
+
+[functions.twilio-webhook]
+verify_jwt = false
+
+[functions.transcribe-call]
+verify_jwt = false

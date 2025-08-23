@@ -17,9 +17,10 @@ interface Candidate {
 
 interface CandidateListProps {
   onViewCallHistory: (candidateId: string) => void;
+  userPhone?: string | null;
 }
 
-const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory }) => {
+const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPhone }) => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [callingCandidateId, setCallingCandidateId] = useState<string | null>(null);
@@ -50,6 +51,15 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory }) => {
   };
 
   const handleCall = async (candidate: Candidate) => {
+    if (!userPhone) {
+      toast({
+        title: "Phone Required",
+        description: "Please set your phone number first to receive calls.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setCallingCandidateId(candidate.id);
     
     try {
@@ -64,22 +74,23 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory }) => {
       if (error) throw error;
 
       toast({
-        title: "Call Initiated Successfully",
-        description: `Calling ${candidate.full_name}... You will receive a call shortly to connect you to the candidate.`,
+        title: "Conference Call Initiated",
+        description: `Calling ${candidate.full_name} first, then you'll get a call on ${userPhone} to join the conversation.`,
       });
 
-      // Show additional info about the conference call
+      // Show additional info about the process
       setTimeout(() => {
         toast({
           title: "How it works",
-          description: "The candidate will be called first, then you'll receive a call to join the conversation.",
+          description: "1) Candidate receives call first 2) You get called to join 3) Both connected in conference 4) Call is recorded & transcribed",
         });
-      }, 2000);
+      }, 3000);
 
     } catch (error: any) {
+      console.error('Call error:', error);
       toast({
-        title: "Error",
-        description: error.message || "Failed to initiate call",
+        title: "Call Failed",
+        description: error.message || "Failed to initiate call. Please check your phone number and try again.",
         variant: "destructive",
       });
     } finally {
@@ -143,8 +154,9 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory }) => {
               </Button>
               <Button
                 onClick={() => handleCall(candidate)}
-                disabled={callingCandidateId === candidate.id}
+                disabled={callingCandidateId === candidate.id || !userPhone}
                 size="sm"
+                variant={!userPhone ? "outline" : "default"}
               >
                 <Phone className="h-4 w-4 mr-2" />
                 {callingCandidateId === candidate.id ? 'Calling...' : 'Call'}

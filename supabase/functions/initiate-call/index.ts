@@ -37,6 +37,17 @@ serve(async (req) => {
       throw new Error('Invalid authentication')
     }
 
+    // Get recruiter's phone number from profiles
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('phone')
+      .eq('id', user.id)
+      .single()
+
+    if (profileError || !profile?.phone) {
+      throw new Error('Please set your phone number in your profile before making calls')
+    }
+
     // Create a unique conference name for this call
     const conferenceName = `call-${candidateId}-${Date.now()}`
 
@@ -62,40 +73,71 @@ serve(async (req) => {
       throw new Error('Twilio credentials not configured')
     }
 
-    // Create Twilio call to candidate
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Calls.json`
-    const twimlUrl = `${supabaseUrl}/functions/v1/call-twiml?callId=${callData.id}&conference=${conferenceName}&participant=candidate`
 
-    const formData = new URLSearchParams()
-    formData.append('To', candidatePhone)
-    formData.append('From', twilioPhoneNumber)
-    formData.append('Url', twimlUrl)
-    formData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
-    formData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed')
-    formData.append('Record', 'true')
-    formData.append('RecordingStatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recording`)
+    // 1. Call the candidate first
+    const candidateTwimlUrl = `${supabaseUrl}/functions/v1/call-twiml?callId=${callData.id}&conference=${conferenceName}&participant=candidate`
 
-    const twilioResponse = await fetch(twilioUrl, {
+    const candidateFormData = new URLSearchParams()
+    candidateFormData.append('To', candidatePhone)
+    candidateFormData.append('From', twilioPhoneNumber)
+    candidateFormData.append('Url', candidateTwimlUrl)
+    candidateFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
+    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed')
+
+    console.log('Calling candidate:', candidatePhone)
+
+    const candidateResponse = await fetch(twilioUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: formData
+      body: candidateFormData
     })
 
-    if (!twilioResponse.ok) {
-      const errorText = await twilioResponse.text()
-      throw new Error(`Twilio API error: ${errorText}`)
+    if (!candidateResponse.ok) {
+      const errorText = await candidateResponse.text()
+      throw new Error(`Failed to call candidate: ${errorText}`)
     }
 
-    const twilioData = await twilioResponse.json()
+    const candidateData = await candidateResponse.json()
+
+    // 2. Wait a moment, then call the recruiter
+    setTimeout(async () => {
+      try {
+        const recruiterTwimlUrl = `${supabaseUrl}/functions/v1/call-twiml?callId=${callData.id}&conference=${conferenceName}&participant=recruiter`
+
+        const recruiterFormData = new URLSearchParams()
+        recruiterFormData.append('To', profile.phone)
+        recruiterFormData.append('From', twilioPhoneNumber)
+        recruiterFormData.append('Url', recruiterTwimlUrl)
+        recruiterFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recruiter`)
+
+        console.log('Calling recruiter:', profile.phone)
+
+        const recruiterResponse = await fetch(twilioUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: recruiterFormData
+        })
+
+        if (!recruiterResponse.ok) {
+          console.error('Failed to call recruiter:', await recruiterResponse.text())
+        }
+      } catch (error) {
+        console.error('Error calling recruiter:', error)
+      }
+    }, 3000) // Wait 3 seconds before calling recruiter
 
     // Update call record with Twilio SID and conference name
     await supabase
       .from('calls')
       .update({
-        twilio_call_sid: twilioData.sid,
+        twilio_call_sid: candidateData.sid,
         status: 'ringing'
       })
       .eq('id', callData.id)
@@ -104,9 +146,9 @@ serve(async (req) => {
       JSON.stringify({ 
         success: true, 
         callId: callData.id,
-        twilioSid: twilioData.sid,
+        twilioSid: candidateData.sid,
         conferenceName,
-        message: 'Call initiated to candidate. You will receive a call shortly to connect you.'
+        message: `Calling ${candidateName}... You will receive a call on ${profile.phone} shortly to connect you.`
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

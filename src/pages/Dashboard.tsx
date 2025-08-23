@@ -10,6 +10,7 @@ import { User, Session } from '@supabase/supabase-js';
 import CandidateList from '@/components/CandidateList';
 import AddCandidateDialog from '@/components/AddCandidateDialog';
 import CallHistoryDialog from '@/components/CallHistoryDialog';
+import PhoneSetup from '@/components/PhoneSetup';
 
 const Dashboard = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -17,6 +18,7 @@ const Dashboard = () => {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [callHistoryOpen, setCallHistoryOpen] = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [userPhone, setUserPhone] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -61,6 +63,10 @@ const Dashboard = () => {
   const handleViewCallHistory = (candidateId: string) => {
     setSelectedCandidateId(candidateId);
     setCallHistoryOpen(true);
+  };
+
+  const handlePhoneSet = (phone: string) => {
+    setUserPhone(phone);
   };
 
   if (!user) {
@@ -112,6 +118,10 @@ const Dashboard = () => {
           </div>
 
           <div className="grid grid-cols-1 gap-6">
+            {!userPhone && (
+              <PhoneSetup onPhoneSet={handlePhoneSet} />
+            )}
+            
             <Card>
               <CardHeader>
                 <CardTitle>Candidates</CardTitle>
@@ -120,7 +130,10 @@ const Dashboard = () => {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <CandidateList onViewCallHistory={handleViewCallHistory} />
+                <CandidateList 
+                  onViewCallHistory={handleViewCallHistory}
+                  userPhone={userPhone}
+                />
               </CardContent>
             </Card>
           </div>
