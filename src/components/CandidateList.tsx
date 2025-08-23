@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
@@ -55,6 +54,31 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
     realtimeCapturesRef.current = realtimeCaptures;
   }, [realtimeCaptures]);
 
+  // Polling controller for active calls as a resilient fallback when realtime events are missed
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const startActiveCallsPolling = () => {
+    if (pollingIntervalRef.current) return;
+    console.log('⏱️ Starting active calls polling (every 5s)…');
+    pollingIntervalRef.current = setInterval(() => {
+      fetchActiveCalls({ fromPoller: true });
+    }, 5000);
+  };
+  const stopActiveCallsPolling = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+      console.log('🛑 Stopped active calls polling');
+    }
+  };
+
+  useEffect(() => {
+    // Start/stop polling automatically based on whether there are any active calls
+    const hasAnyActive = Object.keys(activeCalls).length > 0;
+    if (hasAnyActive) startActiveCallsPolling();
+    else stopActiveCallsPolling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCalls]);
+
   useEffect(() => {
     fetchCandidates();
   }, []);
@@ -80,56 +104,77 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
     }
   };
 
-  // Fetch existing active calls on mount
-  useEffect(() => {
-    const fetchActiveCalls = async () => {
+  // Fetch existing active calls on mount AND used by poller
+  const fetchActiveCalls = async (opts?: { fromPoller?: boolean }) => {
+    if (!opts?.fromPoller) {
       console.log('🔍 Fetching existing active calls...');
-      
-      try {
-        const { data, error } = await supabase
-          .from('calls')
-          .select('*')
-          .in('status', ['initiated', 'ringing', 'in-progress'])
-          .order('started_at', { ascending: false });
+    } else {
+      console.log('🔁 Polling active calls...');
+    }
 
-        if (error) {
-          console.error('❌ Error fetching active calls:', error);
-          return;
-        }
+    try {
+      const { data, error } = await supabase
+        .from('calls')
+        .select('*')
+        .in('status', ['initiated', 'ringing', 'in-progress'])
+        .order('started_at', { ascending: false });
 
-        console.log('📊 Database query result for active calls:', data);
+      if (error) {
+        console.error('❌ Error fetching active calls:', error);
+        return;
+      }
 
-        if (data && data.length > 0) {
-          console.log('📋 Found existing active calls:', data.length);
-          const newActiveCalls: Record<string, Call> = {};
-          const newLiveTranscripts: Record<string, string> = {};
+      if (data && data.length > 0) {
+        const newActiveCalls: Record<string, Call> = {};
+        const newLiveTranscripts: Record<string, string> = {};
 
-          data.forEach(call => {
-            // Only store the most recent call per candidate
-            if (!newActiveCalls[call.candidate_id] || 
-                new Date(call.started_at) > new Date(newActiveCalls[call.candidate_id].started_at)) {
-              newActiveCalls[call.candidate_id] = call;
-              newLiveTranscripts[call.id] = call.transcript || '';
-              console.log(`✅ Stored active call for candidate ${call.candidate_id}: ${call.status}`);
+        data.forEach(call => {
+          // Only store the most recent call per candidate
+          if (
+            !newActiveCalls[call.candidate_id] ||
+            new Date(call.started_at) > new Date(newActiveCalls[call.candidate_id].started_at)
+          ) {
+            newActiveCalls[call.candidate_id] = call;
+            newLiveTranscripts[call.id] = call.transcript || '';
+
+            // If we detect in-progress via polling and capture isn't running yet, start it
+            if (call.status === 'in-progress' && !realtimeCapturesRef.current[call.id]) {
+              console.log('🎙️ [Polling] Starting realtime transcription for call:', call.id);
+              const capture = startRealtimeTranscription(call.id);
+              setRealtimeCaptures(prev => {
+                const updated = { ...prev, [call.id]: capture };
+                realtimeCapturesRef.current = updated;
+                return updated;
+              });
             }
-          });
-          
-          setActiveCalls(newActiveCalls);
-          setLiveTranscripts(newLiveTranscripts);
-          console.log('🎯 Active calls state updated. Candidates with active calls:', Object.keys(newActiveCalls));
-        } else {
-          console.log('ℹ️ No existing active calls found');
-          setActiveCalls({});
-          setLiveTranscripts({});
-        }
+          }
+        });
 
-      } catch (err) {
-        console.error('❌ Exception fetching active calls:', err);
+        setActiveCalls(prev => {
+          // Only log if changes occur
+          const prevKeys = Object.keys(prev);
+          const nextKeys = Object.keys(newActiveCalls);
+          if (prevKeys.join(',') !== nextKeys.join(',')) {
+            console.log('📊 Active calls (from fetch):', nextKeys);
+          }
+          return newActiveCalls;
+        });
+        setLiveTranscripts(newLiveTranscripts);
+      } else {
+        if (!opts?.fromPoller) console.log('ℹ️ No existing active calls found');
+        // Clear states if nothing active
         setActiveCalls({});
         setLiveTranscripts({});
       }
-    };
+    } catch (err) {
+      console.error('❌ Exception fetching active calls:', err);
+      setActiveCalls({});
+      setLiveTranscripts({});
+    }
+  };
 
+  useEffect(() => {
+    // initial load
     fetchActiveCalls();
   }, []);
 
@@ -177,11 +222,37 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       if (error) throw error;
 
       console.log('✅ Call initiated successfully:', data);
-      
+
+      // Optimistically reflect the new active call immediately in the UI
+      if (data?.callId) {
+        const optimisticCall: Call = {
+          id: data.callId,
+          candidate_id: candidateId as string,
+          status: 'initiated',
+          started_at: new Date().toISOString(),
+          // optional fields left undefined
+        } as unknown as Call;
+
+        setActiveCalls(prev => {
+          const updated = { ...prev, [candidateId]: optimisticCall };
+          console.log('⚡ Optimistic active call set:', {
+            candidateId,
+            callId: data.callId,
+            status: 'initiated'
+          });
+          return updated;
+        });
+
+        setLiveTranscripts(prev => ({ ...prev, [data.callId]: '' }));
+      }
+
       toast({
         title: "Call Initiated",
-        description: data.message || `Calling ${candidate.full_name}...`,
+        description: data?.message || `Calling ${candidate.full_name}...`,
       });
+
+      // Ensure polling starts right away until realtime kicks in
+      startActiveCallsPolling();
 
     } catch (error: any) {
       console.error("❌ Call initiation error:", error);
@@ -227,7 +298,6 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             console.log(`   Candidate: ${call.candidate_id}`);
             console.log(`   Timestamp: ${new Date().toLocaleTimeString()}`);
 
-            // Handle active call statuses
             if (['initiated', 'ringing', 'in-progress'].includes(call.status)) {
               console.log(`📌 Adding/updating active call for candidate ${call.candidate_id} with status: ${call.status}`);
               
@@ -242,13 +312,11 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 return updated;
               });
 
-              // Update live transcript
               setLiveTranscripts(prev => ({
                 ...prev,
                 [call.id]: call.transcript || ''
               }));
 
-              // Start realtime transcription for in-progress calls
               if (call.status === 'in-progress' && !realtimeCapturesRef.current[call.id]) {
                 console.log('🎙️ Starting realtime transcription for in-progress call:', call.id);
                 const capture = startRealtimeTranscription(call.id);
@@ -258,9 +326,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   return updated;
                 });
               }
-            }
-            // Handle completed/failed statuses
-            else if (['completed', 'failed', 'no-answer', 'busy', 'canceled'].includes(call.status)) {
+            } else if (['completed', 'failed', 'no-answer', 'busy', 'canceled'].includes(call.status)) {
               console.log(`🏁 Removing ended call from active calls. Status: ${call.status} - Candidate: ${call.candidate_id}`);
 
               setActiveCalls(prevActiveCalls => {
@@ -268,19 +334,17 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 delete updated[call.candidate_id];
                 console.log(`🗑️ Removed call from active calls. Remaining:`, Object.keys(updated).map(candidateId => ({
                   candidateId,
-                  status: updated[candidateId].status
+                  status: updated[candidateId]?.status
                 })));
                 return updated;
               });
 
-              // Remove from live transcripts
               setLiveTranscripts(prev => {
                 const updated = { ...prev };
                 delete updated[call.id];
                 return updated;
               });
 
-              // Stop realtime transcription
               const capture = realtimeCapturesRef.current[call.id];
               if (capture) {
                 console.log('🛑 Stopping realtime transcription for ended call:', call.id);
@@ -293,8 +357,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 });
               }
             }
-          } 
-          else if (payload.eventType === 'DELETE') {
+          } else if (payload.eventType === 'DELETE') {
             const deletedCall = payload.old as Call;
             if (!deletedCall || !deletedCall.id) return;
             
@@ -339,6 +402,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       console.log('🧹 Cleaning up enhanced calls subscription');
       // Stop any ongoing captures on unmount
       Object.values(realtimeCapturesRef.current).forEach(capture => capture.stopCapture());
+      stopActiveCallsPolling();
       supabase.removeChannel(channel);
     };
   }, []); // Subscribe once
