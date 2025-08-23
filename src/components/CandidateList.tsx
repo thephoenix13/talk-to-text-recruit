@@ -79,6 +79,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       console.log('🔍 Fetching existing active calls...');
       
       try {
+        // Clear existing state first
+        setActiveCalls({});
+        setLiveTranscripts({});
+        
         const { data, error } = await supabase
           .from('calls')
           .select('*')
@@ -92,12 +96,11 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
 
         console.log('📊 Database query result for active calls:', data);
 
-        // Always start with a clean slate
-        const newActiveCalls: Record<string, Call> = {};
-        const newLiveTranscripts: Record<string, string> = {};
-
         if (data && data.length > 0) {
           console.log('📋 Found existing in-progress calls:', data);
+          const newActiveCalls: Record<string, Call> = {};
+          const newLiveTranscripts: Record<string, string> = {};
+
           data.forEach(call => {
             // Only include the most recent call per candidate
             if (!newActiveCalls[call.candidate_id] || 
@@ -106,17 +109,16 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               newLiveTranscripts[call.id] = call.transcript || '';
             }
           });
+          
+          setActiveCalls(newActiveCalls);
+          setLiveTranscripts(newLiveTranscripts);
           console.log('✅ Active calls state updated with candidates:', Object.keys(newActiveCalls));
         } else {
           console.log('ℹ️ No existing in-progress calls found');
         }
 
-        setActiveCalls(newActiveCalls);
-        setLiveTranscripts(newLiveTranscripts);
-
       } catch (err) {
         console.error('❌ Exception fetching active calls:', err);
-        // Ensure clean state on error
         setActiveCalls({});
         setLiveTranscripts({});
       }
@@ -355,9 +357,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             hasTranscript: !!activeCall.transcript
           } : null,
           hasActiveCall,
-          callStatus: activeCall?.status || 'none',
-          activeCallsKeys: Object.keys(activeCalls),
-          liveTranscriptLength: liveTranscript.length
+          callStatus: activeCall?.status || 'none'
         });
         
         return (
@@ -413,23 +413,28 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 </Button>
               </div>
 
-              {/* Live Transcript Textarea - Always visible during active calls */}
-              {hasActiveCall && (
-                <div className="mt-4 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={activeCall?.status === 'in-progress' ? 'default' : 'secondary'} className="flex items-center gap-1">
-                      {activeCall?.status === 'in-progress' ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-                      Live Transcript Status: {activeCall?.status === 'in-progress' ? 'Recording' : 'Waiting'}
-                    </Badge>
-                  </div>
-                  <Textarea
-                    value={liveTranscript || 'Transcript will appear here during the call...'}
-                    readOnly
-                    placeholder="Live transcript will appear here..."
-                    className="min-h-[120px] bg-blue-50 border-blue-200"
-                  />
+              {/* Live Transcript Textarea - Always show for better UX */}
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant={hasActiveCall ? 'default' : 'secondary'} className="flex items-center gap-1">
+                    {hasActiveCall ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
+                    Live Transcript Status: {hasActiveCall ? (activeCall?.status === 'in-progress' ? 'Recording' : 'Waiting') : 'Inactive'}
+                  </Badge>
                 </div>
-              )}
+                <Textarea
+                  value={hasActiveCall ? (liveTranscript || 'Transcript will appear here during the call...') : 'No active call'}
+                  readOnly
+                  placeholder="Live transcript will appear here during active calls..."
+                  className={`min-h-[120px] ${hasActiveCall ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}
+                />
+                {hasActiveCall && (
+                  <div className="text-xs text-gray-500 flex justify-between">
+                    <span>Call ID: {activeCall?.id}</span>
+                    <span>Status: {activeCall?.status}</span>
+                    <span>Transcript Length: {liveTranscript.length} chars</span>
+                  </div>
+                )}
+              </div>
             </Card>
           </div>
         );
