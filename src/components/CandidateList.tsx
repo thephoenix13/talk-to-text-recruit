@@ -71,10 +71,15 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
     }
   };
 
-  // Fetch existing active calls on mount
+  // Fetch existing active calls on mount and clear state properly
   useEffect(() => {
     const fetchActiveCalls = async () => {
       console.log('🔍 Fetching existing active calls...');
+      
+      // Always clear the active calls state first
+      setActiveCalls({});
+      console.log('🧹 Cleared active calls state');
+      
       try {
         const { data, error } = await supabase
           .from('calls')
@@ -86,6 +91,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           return;
         }
 
+        console.log('📊 Database query result:', data);
+
         if (data && data.length > 0) {
           console.log('📋 Found existing in-progress calls:', data);
           const callsMap = data.reduce((acc, call) => {
@@ -96,10 +103,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             return acc;
           }, {} as Record<string, Call>);
           setActiveCalls(callsMap);
-          console.log('✅ Active calls state updated:', Object.keys(callsMap));
+          console.log('✅ Active calls state updated with:', Object.keys(callsMap));
         } else {
-          console.log('ℹ️ No existing in-progress calls found');
-          setActiveCalls({}); // Clear any stale state
+          console.log('ℹ️ No existing in-progress calls found - state remains empty');
+          // State is already cleared above, so no need to set it again
         }
       } catch (err) {
         console.error('❌ Exception fetching active calls:', err);
@@ -320,7 +327,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             hasTranscript: !!activeCall.transcript
           } : null,
           hasActiveCall,
-          callStatus: activeCall?.status || 'none'
+          callStatus: activeCall?.status || 'none',
+          activeCallsKeys: Object.keys(activeCalls)
         });
         
         return (
