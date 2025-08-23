@@ -13,10 +13,10 @@ serve(async (req) => {
   }
 
   try {
-    const { callId, recordingUrl } = await req.json()
+    const { callId, recordingUrl, isRealtime = false, audioData } = await req.json()
 
-    if (!callId || !recordingUrl) {
-      throw new Error('Missing required parameters')
+    if (!callId) {
+      throw new Error('Missing callId parameter')
     }
 
     // Initialize Supabase client
@@ -24,22 +24,32 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseKey)
 
-    // Download the recording from Twilio
-    const twilioAccountSid = Deno.env.get('TWILIO_ACCOUNT_SID')
-    const twilioAuthToken = Deno.env.get('TWILIO_AUTH_TOKEN')
+    let audioBlob: Blob
 
-    const recordingResponse = await fetch(recordingUrl, {
-      headers: {
-        'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`
+    if (isRealtime && audioData) {
+      // Handle realtime audio data (base64 encoded)
+      const audioBuffer = Uint8Array.from(atob(audioData), c => c.charCodeAt(0))
+      audioBlob = new Blob([audioBuffer], { type: 'audio/wav' })
+    } else if (recordingUrl) {
+      // Handle post-call recording
+      const twilioAccountSid = Deno.env.get('TWILIO_ACCOUNT_SID')
+      const twilioAuthToken = Deno.env.get('TWILIO_AUTH_TOKEN')
+
+      const recordingResponse = await fetch(recordingUrl, {
+        headers: {
+          'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`
+        }
+      })
+
+      if (!recordingResponse.ok) {
+        throw new Error('Failed to download recording')
       }
-    })
 
-    if (!recordingResponse.ok) {
-      throw new Error('Failed to download recording')
+      const audioBuffer = await recordingResponse.arrayBuffer()
+      audioBlob = new Blob([audioBuffer], { type: 'audio/wav' })
+    } else {
+      throw new Error('Missing audio data or recording URL')
     }
-
-    const audioBuffer = await recordingResponse.arrayBuffer()
-    const audioBlob = new Blob([audioBuffer], { type: 'audio/wav' })
 
     // Send to OpenAI Whisper for transcription
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
@@ -66,57 +76,86 @@ serve(async (req) => {
     const transcriptionData = await transcriptionResponse.json()
     const transcript = transcriptionData.text
 
-    // Generate summary using GPT
-    let summary = null
-    if (transcript && transcript.length > 50) {
-      const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an AI assistant helping recruiters analyze candidate phone interviews. Provide a concise summary highlighting key skills, experience, availability, and overall impression.'
-            },
-            {
-              role: 'user',
-              content: `Please summarize this recruitment call transcript:\n\n${transcript}`
-            }
-          ],
-          max_tokens: 300
+    if (isRealtime) {
+      // For realtime, append to existing transcript
+      const { data: existingCall } = await supabase
+        .from('calls')
+        .select('transcript')
+        .eq('id', callId)
+        .single()
+
+      const updatedTranscript = existingCall?.transcript 
+        ? `${existingCall.transcript} ${transcript}`
+        : transcript
+
+      await supabase
+        .from('calls')
+        .update({ transcript: updatedTranscript })
+        .eq('id', callId)
+
+      console.log(`Realtime transcript updated for call ${callId}`)
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          transcript: updatedTranscript,
+          isRealtime: true
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    } else {
+      // Generate summary using GPT for final transcript
+      let summary = null
+      if (transcript && transcript.length > 50) {
+        const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openaiApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an AI assistant helping recruiters analyze candidate phone interviews. Provide a concise summary highlighting key skills, experience, availability, and overall impression.'
+              },
+              {
+                role: 'user',
+                content: `Please summarize this recruitment call transcript:\n\n${transcript}`
+              }
+            ],
+            max_tokens: 300
+          })
         })
-      })
 
-      if (summaryResponse.ok) {
-        const summaryData = await summaryResponse.json()
-        summary = summaryData.choices[0]?.message?.content
+        if (summaryResponse.ok) {
+          const summaryData = await summaryResponse.json()
+          summary = summaryData.choices[0]?.message?.content
+        }
       }
+
+      // Update the call record with transcript and summary
+      await supabase
+        .from('calls')
+        .update({
+          transcript,
+          summary,
+          status: 'completed'
+        })
+        .eq('id', callId)
+
+      console.log(`Transcribed call ${callId}`)
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          transcript,
+          summary 
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
-
-    // Update the call record with transcript and summary
-    await supabase
-      .from('calls')
-      .update({
-        transcript,
-        summary,
-        status: 'completed'
-      })
-      .eq('id', callId)
-
-    console.log(`Transcribed call ${callId}`)
-
-    return new Response(
-      JSON.stringify({ 
-        success: true, 
-        transcript,
-        summary 
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
 
   } catch (error) {
     console.error('Transcription error:', error)
