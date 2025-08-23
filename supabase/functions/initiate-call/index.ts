@@ -64,6 +64,8 @@ serve(async (req) => {
 
     if (callError) throw callError
 
+    console.log('Call record created:', callData.id)
+
     // Get Twilio credentials
     const twilioAccountSid = Deno.env.get('TWILIO_ACCOUNT_SID')
     const twilioAuthToken = Deno.env.get('TWILIO_AUTH_TOKEN')
@@ -82,8 +84,10 @@ serve(async (req) => {
     candidateFormData.append('To', candidatePhone)
     candidateFormData.append('From', twilioPhoneNumber)
     candidateFormData.append('Url', candidateTwimlUrl)
+    // Updated webhook URL to include proper status callback events
     candidateFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}`)
-    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed')
+    candidateFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,busy,no-answer,failed')
+    candidateFormData.append('StatusCallbackMethod', 'POST')
 
     console.log('Calling candidate:', candidatePhone)
 
@@ -102,6 +106,7 @@ serve(async (req) => {
     }
 
     const candidateData = await candidateResponse.json()
+    console.log('Candidate call initiated:', candidateData.sid)
 
     // 2. Wait a moment, then call the recruiter
     setTimeout(async () => {
@@ -113,6 +118,7 @@ serve(async (req) => {
         recruiterFormData.append('From', twilioPhoneNumber)
         recruiterFormData.append('Url', recruiterTwimlUrl)
         recruiterFormData.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-webhook?callId=${callData.id}&type=recruiter`)
+        recruiterFormData.append('StatusCallbackEvent', 'initiated,ringing,answered,completed,busy,no-answer,failed')
 
         console.log('Calling recruiter:', profile.phone)
 
@@ -127,13 +133,16 @@ serve(async (req) => {
 
         if (!recruiterResponse.ok) {
           console.error('Failed to call recruiter:', await recruiterResponse.text())
+        } else {
+          const recruiterData = await recruiterResponse.json()
+          console.log('Recruiter call initiated:', recruiterData.sid)
         }
       } catch (error) {
         console.error('Error calling recruiter:', error)
       }
     }, 3000) // Wait 3 seconds before calling recruiter
 
-    // Update call record with Twilio SID and conference name
+    // Update call record with Twilio SID and set status to ringing
     await supabase
       .from('calls')
       .update({
@@ -141,6 +150,8 @@ serve(async (req) => {
         status: 'ringing'
       })
       .eq('id', callData.id)
+
+    console.log('Call updated to ringing status')
 
     return new Response(
       JSON.stringify({ 

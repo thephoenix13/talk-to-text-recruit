@@ -86,7 +86,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         const { data, error } = await supabase
           .from('calls')
           .select('*')
-          .eq('status', 'in-progress')
+          .in('status', ['ringing', 'in-progress'])
           .order('started_at', { ascending: false });
 
         if (error) {
@@ -97,7 +97,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         console.log('📊 Database query result for active calls:', data);
 
         if (data && data.length > 0) {
-          console.log('📋 Found existing in-progress calls:', data);
+          console.log('📋 Found existing active calls:', data);
           const newActiveCalls: Record<string, Call> = {};
           const newLiveTranscripts: Record<string, string> = {};
 
@@ -114,7 +114,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           setLiveTranscripts(newLiveTranscripts);
           console.log('✅ Active calls state updated with candidates:', Object.keys(newActiveCalls));
         } else {
-          console.log('ℹ️ No existing in-progress calls found');
+          console.log('ℹ️ No existing active calls found');
         }
 
       } catch (err) {
@@ -242,8 +242,8 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
               transcript: call.transcript ? `${call.transcript.substring(0, 50)}...` : 'none'
             });
             
-            // Only update active calls for truly active statuses
-            if (call.status === 'in-progress') {
+            // Handle active statuses (ringing and in-progress)
+            if (call.status === 'ringing' || call.status === 'in-progress') {
               setActiveCalls(prev => ({
                 ...prev,
                 [call.candidate_id]: call
@@ -255,26 +255,16 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 [call.id]: call.transcript || ''
               }));
 
-              // Start realtime transcription for in-progress calls
-              if (!realtimeCaptures[call.id]) {
-                console.log('🎙️ Starting realtime transcription for call:', call.id);
+              // Start realtime transcription for in-progress calls only
+              if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
+                console.log('🎙️ Starting realtime transcription for in-progress call:', call.id);
                 const capture = startRealtimeTranscription(call.id);
                 setRealtimeCaptures(prev => ({
                   ...prev,
                   [call.id]: capture
                 }));
               }
-            } else if (call.status === 'ringing') {
-              // For ringing calls, we can show them but not start transcription yet
-              setActiveCalls(prev => ({
-                ...prev,
-                [call.candidate_id]: call
-              }));
-              setLiveTranscripts(prev => ({
-                ...prev,
-                [call.id]: ''
-              }));
-            } else if (call.status === 'completed' || call.status === 'failed' || call.status === 'no-answer') {
+            } else if (call.status === 'completed' || call.status === 'failed' || call.status === 'no-answer' || call.status === 'busy') {
               // Remove from active calls
               setActiveCalls(prev => {
                 const updated = { ...prev };
@@ -394,7 +384,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   </Badge>
                   {hasActiveCall && (
                     <Badge variant="default" className="bg-green-100 text-green-800">
-                      Active Call
+                      {activeCall?.status === 'in-progress' ? 'Call In Progress' : 'Call Ringing'}
                     </Badge>
                   )}
                 </div>
@@ -413,19 +403,35 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 </Button>
               </div>
 
-              {/* Live Transcript Textarea - Always show for better UX */}
+              {/* Live Transcript Textarea */}
               <div className="mt-4 space-y-2">
                 <div className="flex items-center gap-2">
-                  <Badge variant={hasActiveCall ? 'default' : 'secondary'} className="flex items-center gap-1">
-                    {hasActiveCall ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-                    Live Transcript Status: {hasActiveCall ? (activeCall?.status === 'in-progress' ? 'Recording' : 'Waiting') : 'Inactive'}
+                  <Badge variant={hasActiveCall && activeCall?.status === 'in-progress' ? 'default' : 'secondary'} className="flex items-center gap-1">
+                    {hasActiveCall && activeCall?.status === 'in-progress' ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
+                    Live Transcript Status: {
+                      hasActiveCall 
+                        ? (activeCall?.status === 'in-progress' ? 'Recording' : 'Waiting for Connection') 
+                        : 'Inactive'
+                    }
                   </Badge>
                 </div>
                 <Textarea
-                  value={hasActiveCall ? (liveTranscript || 'Transcript will appear here during the call...') : 'No active call'}
+                  value={
+                    hasActiveCall && activeCall?.status === 'in-progress' 
+                      ? (liveTranscript || 'Transcript will appear here during the call...')
+                      : hasActiveCall && activeCall?.status === 'ringing'
+                      ? 'Call is ringing... Transcript will start when call connects.'
+                      : 'No active call'
+                  }
                   readOnly
                   placeholder="Live transcript will appear here during active calls..."
-                  className={`min-h-[120px] ${hasActiveCall ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}
+                  className={`min-h-[120px] ${
+                    hasActiveCall && activeCall?.status === 'in-progress' 
+                      ? 'bg-green-50 border-green-200' 
+                      : hasActiveCall && activeCall?.status === 'ringing'
+                      ? 'bg-yellow-50 border-yellow-200'
+                      : 'bg-gray-50 border-gray-200'
+                  }`}
                 />
                 {hasActiveCall && (
                   <div className="text-xs text-gray-500 flex justify-between">
