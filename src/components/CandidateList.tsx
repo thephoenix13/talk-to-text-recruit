@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
@@ -25,6 +26,7 @@ interface Call {
   candidate_id: string;
   status: string;
   started_at: string;
+  transcript?: string;
 }
 
 interface CandidateListProps {
@@ -68,6 +70,39 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       setLoading(false);
     }
   };
+
+  // Fetch existing active calls on mount
+  useEffect(() => {
+    const fetchActiveCalls = async () => {
+      console.log('🔍 Fetching existing active calls...');
+      try {
+        const { data, error } = await supabase
+          .from('calls')
+          .select('*')
+          .in('status', ['ringing', 'in-progress']);
+
+        if (error) {
+          console.error('❌ Error fetching active calls:', error);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          console.log('📋 Found existing active calls:', data);
+          const callsMap = data.reduce((acc, call) => {
+            acc[call.candidate_id] = call;
+            return acc;
+          }, {} as Record<string, Call>);
+          setActiveCalls(callsMap);
+        } else {
+          console.log('ℹ️ No existing active calls found');
+        }
+      } catch (err) {
+        console.error('❌ Exception fetching active calls:', err);
+      }
+    };
+
+    fetchActiveCalls();
+  }, []);
 
   const filteredCandidates = candidates.filter((candidate) =>
     candidate.full_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -114,12 +149,32 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
       if (error) throw error;
 
       console.log('✅ Call initiated successfully:', data);
+      
+      // Immediately fetch the created call to update our state
+      if (data.callId) {
+        console.log('🔄 Fetching newly created call:', data.callId);
+        const { data: callData, error: fetchError } = await supabase
+          .from('calls')
+          .select('*')
+          .eq('id', data.callId)
+          .single();
+
+        if (fetchError) {
+          console.error('❌ Error fetching new call:', fetchError);
+        } else if (callData) {
+          console.log('✅ New call data fetched:', callData);
+          setActiveCalls(prev => ({
+            ...prev,
+            [candidateId]: callData
+          }));
+        }
+      }
+
       toast({
         title: "Call Initiated",
         description: data.message || `Calling ${candidate.full_name}...`,
       });
 
-      // The call status will be updated via real-time subscriptions
     } catch (error: any) {
       console.error("❌ Call initiation error:", error);
       toast({
@@ -153,37 +208,61 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
           
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const call = payload.new as Call;
-            console.log('📊 Processing call update:', call);
-            
-            setActiveCalls(prev => {
-              const updated = {
-                ...prev,
-                [call.candidate_id]: call
-              };
-              console.log('🔄 Updated active calls:', updated);
-              return updated;
+            console.log('📊 Processing call update:', {
+              callId: call.id,
+              candidateId: call.candidate_id,
+              status: call.status,
+              transcript: call.transcript ? `${call.transcript.substring(0, 50)}...` : 'none'
             });
-
-            // Start realtime transcription for in-progress calls
-            if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
-              console.log('🎙️ Starting realtime transcription for call:', call.id);
-              const capture = startRealtimeTranscription(call.id);
-              setRealtimeCaptures(prev => ({
-                ...prev,
-                [call.id]: capture
-              }));
-            }
-
-            // Stop realtime transcription for completed calls
-            if (call.status === 'completed' && realtimeCaptures[call.id]) {
-              console.log('🛑 Stopping realtime transcription for call:', call.id);
-              realtimeCaptures[call.id].stopCapture();
-              setRealtimeCaptures(prev => {
-                const updated = { ...prev };
-                delete updated[call.id];
+            
+            // Update active calls state
+            if (call.status === 'ringing' || call.status === 'in-progress') {
+              setActiveCalls(prev => {
+                const updated = {
+                  ...prev,
+                  [call.candidate_id]: call
+                };
+                console.log('🔄 Updated active calls:', Object.keys(updated));
                 return updated;
               });
+
+              // Start realtime transcription for in-progress calls
+              if (call.status === 'in-progress' && !realtimeCaptures[call.id]) {
+                console.log('🎙️ Starting realtime transcription for call:', call.id);
+                const capture = startRealtimeTranscription(call.id);
+                setRealtimeCaptures(prev => ({
+                  ...prev,
+                  [call.id]: capture
+                }));
+              }
+            } else if (call.status === 'completed' || call.status === 'failed') {
+              // Remove from active calls
+              setActiveCalls(prev => {
+                const updated = { ...prev };
+                delete updated[call.candidate_id];
+                console.log('🗑️ Removed call from active calls:', call.id);
+                return updated;
+              });
+
+              // Stop realtime transcription
+              if (realtimeCaptures[call.id]) {
+                console.log('🛑 Stopping realtime transcription for call:', call.id);
+                realtimeCaptures[call.id].stopCapture();
+                setRealtimeCaptures(prev => {
+                  const updated = { ...prev };
+                  delete updated[call.id];
+                  return updated;
+                });
+              }
             }
+          } else if (payload.eventType === 'DELETE') {
+            const deletedCall = payload.old as Call;
+            console.log('🗑️ Call deleted:', deletedCall.id);
+            setActiveCalls(prev => {
+              const updated = { ...prev };
+              delete updated[deletedCall.candidate_id];
+              return updated;
+            });
           }
         }
       )
@@ -220,55 +299,74 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         const hasActiveCall = activeCall && (activeCall.status === 'in-progress' || activeCall.status === 'ringing');
         
         console.log('🎯 Rendering candidate:', candidate.full_name, {
-          activeCall,
+          activeCall: activeCall ? {
+            id: activeCall.id,
+            status: activeCall.status,
+            hasTranscript: !!activeCall.transcript
+          } : null,
           hasActiveCall,
-          callStatus: activeCall?.status
+          callStatus: activeCall?.status || 'none'
         });
         
         return (
-          <Card key={candidate.id} className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">{candidate.full_name}</h2>
-                <div className="text-sm text-gray-500">
-                  <User className="mr-1 inline-block h-4 w-4" />
-                  {candidate.email || 'No email'}
-                </div>
-                <div className="text-sm text-gray-500">
-                  <MapPin className="mr-1 inline-block h-4 w-4" />
-                  {candidate.phone}
-                </div>
-                <div className="text-sm text-gray-500">
-                  <Calendar className="mr-1 inline-block h-4 w-4" />
-                  Created: {new Date(candidate.created_at).toLocaleDateString()}
-                </div>
-                {activeCall && (
-                  <div className="text-sm font-medium text-blue-600 mt-1 flex items-center gap-2">
-                    <Badge variant={activeCall.status === 'in-progress' ? 'default' : 'secondary'}>
-                      Call Status: {activeCall.status}
-                    </Badge>
-                    <span className="text-xs text-gray-500">ID: {activeCall.id}</span>
+          <div key={candidate.id} className="space-y-4">
+            <Card className="p-6">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">{candidate.full_name}</h2>
+                  <div className="text-sm text-gray-500">
+                    <User className="mr-1 inline-block h-4 w-4" />
+                    {candidate.email || 'No email'}
                   </div>
-                )}
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                <Badge variant="secondary">
-                  <Clock className="mr-1 h-4 w-4" />
-                  {filteredCandidates.length} Candidates
-                </Badge>
-                {hasActiveCall && (
-                  <Badge variant="default" className="bg-green-100 text-green-800">
-                    Active Call
+                  <div className="text-sm text-gray-500">
+                    <MapPin className="mr-1 inline-block h-4 w-4" />
+                    {candidate.phone}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    <Calendar className="mr-1 inline-block h-4 w-4" />
+                    Created: {new Date(candidate.created_at).toLocaleDateString()}
+                  </div>
+                  {activeCall && (
+                    <div className="text-sm font-medium text-blue-600 mt-1 flex items-center gap-2">
+                      <Badge variant={activeCall.status === 'in-progress' ? 'default' : 'secondary'}>
+                        Call Status: {activeCall.status}
+                      </Badge>
+                      <span className="text-xs text-gray-500">ID: {activeCall.id}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <Badge variant="secondary">
+                    <Clock className="mr-1 h-4 w-4" />
+                    {filteredCandidates.length} Candidates
                   </Badge>
-                )}
+                  {hasActiveCall && (
+                    <Badge variant="default" className="bg-green-100 text-green-800">
+                      Active Call
+                    </Badge>
+                  )}
+                </div>
               </div>
-            </div>
-            
-            {/* Show realtime transcript for any active call */}
+              
+              <div className="mt-4 flex space-x-2">
+                <Button 
+                  onClick={() => makeCall(candidate.id)}
+                  disabled={callingCandidates.has(candidate.id) || hasActiveCall}
+                >
+                  {callingCandidates.has(candidate.id) ? 'Calling...' : hasActiveCall ? 'In Call' : 'Call'}
+                </Button>
+                <Button variant="outline" onClick={() => handleOpenCallHistory(candidate.id)}>
+                  <History className="mr-2 h-4 w-4" />
+                  Call History
+                </Button>
+              </div>
+            </Card>
+
+            {/* Show realtime transcript for any active call - this should always be visible when there's an active call */}
             {activeCall && (
-              <div className="mt-6">
-                <div className="mb-2 text-sm font-medium text-gray-700">
-                  Live Transcript for Call {activeCall.id}
+              <div className="mt-4">
+                <div className="mb-2 text-sm font-medium text-gray-700 bg-yellow-100 p-2 rounded">
+                  🎙️ Live Transcript for Call {activeCall.id} (Status: {activeCall.status})
                 </div>
                 <RealtimeTranscript 
                   callId={activeCall.id}
@@ -276,20 +374,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 />
               </div>
             )}
-            
-            <div className="mt-4 flex space-x-2">
-              <Button 
-                onClick={() => makeCall(candidate.id)}
-                disabled={callingCandidates.has(candidate.id) || hasActiveCall}
-              >
-                {callingCandidates.has(candidate.id) ? 'Calling...' : hasActiveCall ? 'In Call' : 'Call'}
-              </Button>
-              <Button variant="outline" onClick={() => handleOpenCallHistory(candidate.id)}>
-                <History className="mr-2 h-4 w-4" />
-                Call History
-              </Button>
-            </div>
-          </Card>
+          </div>
         );
       })}
       
