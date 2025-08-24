@@ -22,9 +22,9 @@ interface MediaStreamEvent {
 // Store active streams and their audio buffers
 const activeStreams = new Map<string, {
   callId: string
-  audioBuffer: number[]
+  audioBuffer: Uint8Array[]
   lastTranscription: number
-  partialTranscript: string
+  accumulatedTranscript: string
 }>()
 
 serve(async (req) => {
@@ -63,7 +63,7 @@ serve(async (req) => {
               callId,
               audioBuffer: [],
               lastTranscription: Date.now(),
-              partialTranscript: ''
+              accumulatedTranscript: ''
             })
           } else if (data.event === 'media' && data.media) {
             await handleMediaChunk(data, callId)
@@ -120,13 +120,12 @@ async function handleMediaChunk(data: MediaStreamEvent, callId: string) {
       audioBytes[i] = audioPayload.charCodeAt(i)
     }
 
-    // Convert mulaw to PCM (simplified conversion for demo)
-    const pcmSamples = mulawToPcm(audioBytes)
-    streamInfo.audioBuffer.push(...pcmSamples)
+    // Store raw audio chunks
+    streamInfo.audioBuffer.push(audioBytes)
 
-    // Process audio buffer every 3 seconds for real-time transcription
+    // Process accumulated audio every 5 seconds for real-time transcription
     const now = Date.now()
-    if (now - streamInfo.lastTranscription > 3000 && streamInfo.audioBuffer.length > 24000) {
+    if (now - streamInfo.lastTranscription > 5000 && streamInfo.audioBuffer.length > 0) {
       await processAudioBuffer(streamInfo, callId)
       streamInfo.lastTranscription = now
     }
@@ -135,30 +134,22 @@ async function handleMediaChunk(data: MediaStreamEvent, callId: string) {
   }
 }
 
-function mulawToPcm(mulawData: Uint8Array): number[] {
-  const pcmData: number[] = []
-  
-  for (const mulaw of mulawData) {
-    // Simplified mulaw to PCM conversion
-    const sign = (mulaw & 0x80) ? -1 : 1
-    const exponent = (mulaw & 0x70) >> 4
-    const mantissa = mulaw & 0x0F
-    
-    let sample = (33 + (2 * mantissa)) << exponent
-    if (exponent === 0) sample = 33 + (2 * mantissa)
-    
-    pcmData.push(sign * sample * 4) // Scale for 16-bit range
-  }
-  
-  return pcmData
-}
-
 async function processAudioBuffer(streamInfo: any, callId: string) {
   try {
-    console.log(`🎤 Processing audio buffer for call: ${callId}, samples: ${streamInfo.audioBuffer.length}`)
+    console.log(`🎤 Processing audio buffer for call: ${callId}, chunks: ${streamInfo.audioBuffer.length}`)
 
-    // Convert PCM samples to WAV format for Whisper
-    const wavBuffer = createWavBuffer(streamInfo.audioBuffer, 8000) // Twilio uses 8kHz
+    // Combine all audio chunks
+    const totalLength = streamInfo.audioBuffer.reduce((sum: number, chunk: Uint8Array) => sum + chunk.length, 0)
+    const combinedAudio = new Uint8Array(totalLength)
+    
+    let offset = 0
+    for (const chunk of streamInfo.audioBuffer) {
+      combinedAudio.set(chunk, offset)
+      offset += chunk.length
+    }
+
+    // Convert mulaw to WAV format for Whisper
+    const wavBuffer = mulawToWav(combinedAudio)
     
     // Send to OpenAI Whisper for transcription
     const transcription = await transcribeAudio(wavBuffer)
@@ -166,24 +157,46 @@ async function processAudioBuffer(streamInfo: any, callId: string) {
     if (transcription && transcription.trim()) {
       console.log(`📝 Real-time transcription: "${transcription}"`)
       
-      // Update the partial transcript
-      streamInfo.partialTranscript += ' ' + transcription.trim()
+      // Accumulate the transcription
+      streamInfo.accumulatedTranscript += ' ' + transcription.trim()
       
       // Update database with real-time transcript
-      await updateCallTranscript(callId, streamInfo.partialTranscript)
+      await updateCallTranscript(callId, streamInfo.accumulatedTranscript)
     }
 
-    // Clear processed audio buffer (keep last 1 second for continuity)
-    streamInfo.audioBuffer = streamInfo.audioBuffer.slice(-8000)
+    // Clear processed audio buffer but keep last 20 chunks for continuity
+    streamInfo.audioBuffer = streamInfo.audioBuffer.slice(-20)
     
   } catch (error) {
     console.error('❌ Error processing audio buffer:', error)
   }
 }
 
-function createWavBuffer(samples: number[], sampleRate: number): ArrayBuffer {
-  const length = samples.length
-  const buffer = new ArrayBuffer(44 + length * 2)
+function mulawToWav(mulawData: Uint8Array): ArrayBuffer {
+  // Convert mulaw to 16-bit PCM
+  const pcmData = new Int16Array(mulawData.length)
+  
+  for (let i = 0; i < mulawData.length; i++) {
+    const mulaw = mulawData[i]
+    const sign = (mulaw & 0x80) ? -1 : 1
+    const exponent = (mulaw & 0x70) >> 4
+    const mantissa = mulaw & 0x0F
+    
+    let sample = (33 + (2 * mantissa)) << exponent
+    if (exponent === 0) sample = 33 + (2 * mantissa)
+    
+    pcmData[i] = sign * sample * 4 // Scale for 16-bit range
+  }
+
+  // Create WAV file
+  const sampleRate = 8000 // Twilio uses 8kHz
+  const numChannels = 1
+  const bytesPerSample = 2
+  
+  const dataSize = pcmData.length * bytesPerSample
+  const fileSize = 44 + dataSize
+  
+  const buffer = new ArrayBuffer(fileSize)
   const view = new DataView(buffer)
   
   // WAV header
@@ -194,23 +207,22 @@ function createWavBuffer(samples: number[], sampleRate: number): ArrayBuffer {
   }
   
   writeString(0, 'RIFF')
-  view.setUint32(4, 36 + length * 2, true)
+  view.setUint32(4, fileSize - 8, true)
   writeString(8, 'WAVE')
   writeString(12, 'fmt ')
-  view.setUint32(16, 16, true)
-  view.setUint16(20, 1, true)
-  view.setUint16(22, 1, true)
+  view.setUint32(16, 16, true) // Subchunk1Size
+  view.setUint16(20, 1, true) // AudioFormat (PCM)
+  view.setUint16(22, numChannels, true)
   view.setUint32(24, sampleRate, true)
-  view.setUint32(28, sampleRate * 2, true)
-  view.setUint16(32, 2, true)
-  view.setUint16(34, 16, true)
+  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true) // ByteRate
+  view.setUint16(32, numChannels * bytesPerSample, true) // BlockAlign
+  view.setUint16(34, 16, true) // BitsPerSample
   writeString(36, 'data')
-  view.setUint32(40, length * 2, true)
+  view.setUint32(40, dataSize, true)
   
-  // Convert samples to 16-bit PCM
-  for (let i = 0; i < length; i++) {
-    const sample = Math.max(-32768, Math.min(32767, samples[i]))
-    view.setInt16(44 + i * 2, sample, true)
+  // Write PCM data
+  for (let i = 0; i < pcmData.length; i++) {
+    view.setInt16(44 + i * 2, pcmData[i], true)
   }
   
   return buffer
@@ -220,7 +232,8 @@ async function transcribeAudio(audioBuffer: ArrayBuffer): Promise<string> {
   try {
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
     if (!openaiApiKey) {
-      throw new Error('OpenAI API key not configured')
+      console.error('❌ OpenAI API key not configured')
+      return ''
     }
 
     const formData = new FormData()
@@ -261,7 +274,7 @@ async function updateCallTranscript(callId: string, transcript: string) {
     const { error } = await supabase
       .from('calls')
       .update({ 
-        transcript: `[LIVE] ${transcript}`,
+        transcript: `[LIVE] ${transcript.trim()}`,
         updated_at: new Date().toISOString()
       })
       .eq('id', callId)

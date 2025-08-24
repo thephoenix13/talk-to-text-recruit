@@ -1,87 +1,82 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
   try {
     const url = new URL(req.url)
     const callId = url.searchParams.get('callId')
     const conference = url.searchParams.get('conference')
     const participant = url.searchParams.get('participant')
 
-    if (!callId || !conference) {
+    if (!callId || !conference || !participant) {
       throw new Error('Missing required parameters')
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const mediaStreamUrl = `wss://${new URL(supabaseUrl!).hostname.replace('https://', '')}/functions/v1/media-stream?callId=${callId}`
+    console.log(`📞 Generating TwiML for ${participant} in conference ${conference}, call ${callId}`)
 
-    let twiml = ''
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    if (!supabaseUrl) {
+      throw new Error('SUPABASE_URL not configured')
+    }
+
+    // Construct the media stream URL
+    const mediaStreamUrl = `wss://${supabaseUrl.replace('https://', '')}/functions/v1/media-stream?callId=${callId}`
+
+    let twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>`
 
     if (participant === 'candidate') {
-      // TwiML for candidate - join conference and start media streaming
-      twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Hello! Please hold while we connect you with the recruiter.</Say>
-    <Start>
-        <Stream url="${mediaStreamUrl}" />
-    </Start>
-    <Dial>
-        <Conference 
-            startConferenceOnEnter="false"
+      // For candidates, start media streaming and join conference
+      twiml += `
+        <Start>
+          <Stream url="${mediaStreamUrl}" />
+        </Start>
+        <Say voice="alice">Hello, please hold while we connect you with your interviewer.</Say>
+        <Dial>
+          <Conference 
+            startConferenceOnEnter="true" 
             endConferenceOnExit="false"
-            waitUrl="http://twimlets.com/holdmusic?Bucket=com.twilio.music.ambient"
             record="record-from-start"
-            recordingStatusCallback="${Deno.env.get('SUPABASE_URL')}/functions/v1/twilio-webhook?callId=${callId}&amp;type=recording"
-        >${conference}</Conference>
-    </Dial>
-</Response>`
+            recordingStatusCallback="${supabaseUrl}/functions/v1/twilio-webhook?callId=${callId}&amp;type=recording"
+            recordingStatusCallbackMethod="POST"
+          >${conference}</Conference>
+        </Dial>`
     } else {
-      // TwiML for recruiter - join conference as moderator with media streaming
-      twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Connecting you to the candidate now.</Say>
-    <Start>
-        <Stream url="${mediaStreamUrl}" />
-    </Start>
-    <Dial>
-        <Conference 
-            startConferenceOnEnter="true"
+      // For recruiters, just join the conference (media streaming already active from candidate side)
+      twiml += `
+        <Say voice="alice">Connecting you to the candidate now.</Say>
+        <Dial>
+          <Conference 
+            startConferenceOnEnter="false" 
             endConferenceOnExit="true"
-            record="record-from-start"
-            recordingStatusCallback="${Deno.env.get('SUPABASE_URL')}/functions/v1/twilio-webhook?callId=${callId}&amp;type=recording"
-        >${conference}</Conference>
-    </Dial>
-</Response>`
+          >${conference}</Conference>
+        </Dial>`
     }
+
+    twiml += `</Response>`
+
+    console.log(`✅ TwiML generated for ${participant}:`, twiml)
 
     return new Response(twiml, {
       headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/xml',
+        'Content-Type': 'text/xml',
+        'Access-Control-Allow-Origin': '*',
       },
     })
 
   } catch (error) {
-    console.error('TwiML error:', error)
+    console.error('❌ TwiML generation error:', error)
+    
     const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Sorry, there was an error connecting your call. Please try again later.</Say>
-    <Hangup/>
-</Response>`
+    <Response>
+      <Say voice="alice">Sorry, there was an error connecting your call. Please try again.</Say>
+      <Hangup/>
+    </Response>`
     
     return new Response(errorTwiml, {
+      status: 500,
       headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/xml',
+        'Content-Type': 'text/xml',
+        'Access-Control-Allow-Origin': '*',
       },
     })
   }
