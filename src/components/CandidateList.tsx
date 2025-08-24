@@ -272,7 +272,7 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
 
   // Enhanced real-time subscription with transcript debugging
   useEffect(() => {
-    console.log('🔄 Setting up enhanced calls subscription with transcript debugging...');
+    console.log('🔄 Setting up enhanced calls subscription with live transcription debugging...');
 
     const channel = supabase
       .channel('calls-realtime-updates')
@@ -297,6 +297,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
             console.log(`   Status: ${call.status}`);
             console.log(`   Candidate: ${call.candidate_id}`);
             console.log(`   Transcript Length: ${call.transcript?.length || 0} chars`);
+            
+            // Check if this is a live transcript
+            const isLiveTranscript = call.transcript?.startsWith('[LIVE]');
+            console.log(`   Live Transcript: ${isLiveTranscript ? 'YES' : 'NO'}`);
             console.log(`   Transcript Preview: ${call.transcript?.substring(0, 100) || 'N/A'}...`);
             console.log(`   Timestamp: ${new Date().toLocaleTimeString()}`);
 
@@ -310,17 +314,19 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   candidateId,
                   status: updated[candidateId].status,
                   callId: updated[candidateId].id,
-                  transcriptLength: updated[candidateId].transcript?.length || 0
+                  transcriptLength: updated[candidateId].transcript?.length || 0,
+                  isLive: updated[candidateId].transcript?.startsWith('[LIVE]') || false
                 })));
                 return updated;
               });
 
-              // Update live transcripts with debugging
+              // Update live transcripts with live/post-call distinction
               setLiveTranscripts(prev => {
                 const newTranscript = call.transcript || '';
                 console.log(`📝 Updating live transcript for call ${call.id}:`);
                 console.log(`   Previous length: ${prev[call.id]?.length || 0} chars`);
                 console.log(`   New length: ${newTranscript.length} chars`);
+                console.log(`   Is Live: ${isLiveTranscript}`);
                 console.log(`   New content: "${newTranscript.substring(0, 200)}..."`);
                 
                 return {
@@ -440,17 +446,20 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
         const activeCall = activeCalls[candidate.id];
         const hasActiveCall = !!activeCall;
         const liveTranscript = activeCall ? liveTranscripts[activeCall.id] || '' : '';
+        const isLiveTranscript = liveTranscript.startsWith('[LIVE]');
+        const displayTranscript = isLiveTranscript ? liveTranscript.replace('[LIVE]', '').trim() : liveTranscript;
 
         console.log('🎯 Rendering candidate:', candidate.full_name, {
           activeCall: activeCall ? {
             id: activeCall.id,
             status: activeCall.status,
-            transcriptLength: activeCall.transcript?.length || 0
+            transcriptLength: activeCall.transcript?.length || 0,
+            isLive: isLiveTranscript
           } : null,
           hasActiveCall,
           callStatus: activeCall?.status || 'none',
-          liveTranscriptLength: liveTranscript.length,
-          liveTranscriptPreview: liveTranscript.substring(0, 50) + '...'
+          liveTranscriptLength: displayTranscript.length,
+          isLiveTranscript
         });
 
         return (
@@ -515,29 +524,38 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                 </Button>
               </div>
 
-              {/* Enhanced Live Transcript Display with Debugging */}
+              {/* Enhanced Live Transcript Display */}
               <div className="mt-4 space-y-2">
                 <div className="flex items-center gap-2">
-                  <Badge variant={hasActiveCall && activeCall.status === 'in-progress' ? 'default' : 'secondary'} className="flex items-center gap-1">
+                  <Badge 
+                    variant={hasActiveCall && activeCall.status === 'in-progress' ? 'default' : 'secondary'} 
+                    className={`flex items-center gap-1 ${
+                      isLiveTranscript ? 'bg-green-100 text-green-800 border-green-300' : ''
+                    }`}
+                  >
                     {hasActiveCall && activeCall.status === 'in-progress' ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-                    Live Transcript Status: {
-                      hasActiveCall 
-                        ? (activeCall.status === 'in-progress' ? 'Recording' : 
-                           activeCall.status === 'ringing' ? 'Waiting for Connection' :
-                           activeCall.status === 'initiated' ? 'Initiating' : 'Active')
-                        : 'Inactive'
-                    }
+                    {isLiveTranscript ? 'Live Transcription Active' : 
+                     hasActiveCall && activeCall.status === 'in-progress' ? 'Recording' : 
+                     hasActiveCall && activeCall.status === 'ringing' ? 'Waiting for Connection' :
+                     hasActiveCall && activeCall.status === 'initiated' ? 'Initiating' : 'Inactive'}
                   </Badge>
                   {hasActiveCall && (
-                    <Badge variant="outline" className="text-xs">
-                      {liveTranscript.length} chars
-                    </Badge>
+                    <>
+                      <Badge variant="outline" className="text-xs">
+                        {displayTranscript.length} chars
+                      </Badge>
+                      {isLiveTranscript && (
+                        <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-300">
+                          LIVE
+                        </Badge>
+                      )}
+                    </>
                   )}
                 </div>
                 <Textarea
                   value={
                     hasActiveCall && activeCall.status === 'in-progress' 
-                      ? (liveTranscript || 'Waiting for speech... Real-time transcription is active.')
+                      ? (displayTranscript || (isLiveTranscript ? 'Starting live transcription...' : 'Waiting for speech... Real-time transcription is active.'))
                       : hasActiveCall && activeCall.status === 'ringing'
                       ? 'Call is ringing... Transcript will start when call connects.'
                       : hasActiveCall && activeCall.status === 'initiated'
@@ -549,8 +567,10 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   readOnly
                   placeholder="Live transcript will appear here during active calls..."
                   className={`min-h-[120px] ${
-                    hasActiveCall && activeCall.status === 'in-progress' 
-                      ? 'bg-green-50 border-green-200' 
+                    isLiveTranscript
+                      ? 'bg-green-50 border-green-200 border-2' 
+                      : hasActiveCall && activeCall.status === 'in-progress' 
+                      ? 'bg-blue-50 border-blue-200' 
                       : hasActiveCall && activeCall.status === 'ringing'
                       ? 'bg-yellow-50 border-yellow-200'
                       : hasActiveCall && activeCall.status === 'initiated'
@@ -562,8 +582,9 @@ const CandidateList: React.FC<CandidateListProps> = ({ onViewCallHistory, userPh
                   <div className="text-xs text-gray-500 flex justify-between">
                     <span>Call ID: {activeCall.id}</span>
                     <span>Status: {activeCall.status}</span>
-                    <span>Live Transcript: {liveTranscript.length} chars</span>
-                    <span>DB Transcript: {activeCall.transcript?.length || 0} chars</span>
+                    <span>Live: {displayTranscript.length} chars</span>
+                    <span>DB: {activeCall.transcript?.length || 0} chars</span>
+                    {isLiveTranscript && <span className="text-green-600 font-medium">LIVE TRANSCRIPTION</span>}
                   </div>
                 )}
               </div>

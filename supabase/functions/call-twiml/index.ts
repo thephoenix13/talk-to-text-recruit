@@ -21,13 +21,19 @@ serve(async (req) => {
       throw new Error('Missing required parameters')
     }
 
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const mediaStreamUrl = `wss://${new URL(supabaseUrl!).hostname.replace('https://', '')}/functions/v1/media-stream?callId=${callId}`
+
     let twiml = ''
 
     if (participant === 'candidate') {
-      // TwiML for candidate - join conference and wait
+      // TwiML for candidate - join conference and start media streaming
       twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="alice">Hello! Please hold while we connect you with the recruiter.</Say>
+    <Start>
+        <Stream url="${mediaStreamUrl}" />
+    </Start>
     <Dial>
         <Conference 
             startConferenceOnEnter="false"
@@ -39,10 +45,13 @@ serve(async (req) => {
     </Dial>
 </Response>`
     } else {
-      // TwiML for recruiter - join conference as moderator
+      // TwiML for recruiter - join conference as moderator with media streaming
       twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="alice">Connecting you to the candidate now.</Say>
+    <Start>
+        <Stream url="${mediaStreamUrl}" />
+    </Start>
     <Dial>
         <Conference 
             startConferenceOnEnter="true"
